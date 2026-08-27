@@ -1,0 +1,268 @@
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.api.deps import get_market_data_provider
+from app.features.engine import compute_feature_snapshot
+from app.features.schemas import FeatureSnapshot
+from app.market_data.provider import MarketDataProvider
+from app.market_structure.engine import compute_market_structure_snapshot
+from app.market_structure.schemas import MarketStructureSnapshot
+from app.schemas.market_data import Timeframe
+from app.schemas.responses import CandlesResponse, SymbolQuoteResponse
+from app.schemas.symbols import InvalidTickerError, normalize_ticker
+from app.setup_detection.engine import compute_setup_detection_snapshot
+from app.setup_detection.schemas import SetupDetectionSnapshot
+from app.support_resistance.engine import compute_support_resistance_snapshot
+from app.support_resistance.schemas import SupportResistanceSnapshot
+
+# History depth per timeframe. Chosen from real yfinance history-window
+# limits observed during the Phase 5 real-data validation checkpoint (see
+# docs/decisions/0006-yfinance-development-provider.md):
+#   - 1d: essentially unlimited history available; 300 bars (~14 months)
+#     comfortably covers SMA200 with buffer without over-fetching.
+#   - 1h: yfinance allows ~730 days of history; 2000 bars (~120 trading
+#     days) gives meaningful daily/4H-scale structure without pulling the
+#     full 2 years on every request.
+#   - 4h: this is the *4H bar count* requested; it drives how much
+#     underlying 1H history the provider pulls internally (aggregation.py),
+#     independent of the 1H row above.
+#   - 15m/5m: yfinance caps at 60 calendar days total regardless of what we
+#     ask for (~3776 / ~11326 bars respectively) -- request enough that we
+#     always get everything Yahoo will give. This directly addresses the
+#     Phase 3 note that a flat 300-bar limit was too thin for 20-day
+#     intraday RVOL (300 5m bars is under 2 trading days).
+CANDLE_LIMIT_BY_TIMEFRAME: dict[Timeframe, int] = {
+    Timeframe.ONE_DAY: 300,
+    Timeframe.FOUR_HOUR: 300,
+    Timeframe.ONE_HOUR: 2000,
+    Timeframe.FIFTEEN_MIN: 4000,
+    Timeframe.FIVE_MIN: 12000,
+}
+
+# S/R evidence always draws from these timeframes' confirmed swings,
+# regardless of which timeframe interactions/breaks are evaluated against.
+LEVEL_SOURCE_TIMEFRAMES = (Timeframe.ONE_DAY, Timeframe.FOUR_HOUR)
+
+router = APIRouter(prefix="/api/market", tags=["market"])
+
+# Only timeframes Phase 2 actually supports fetching/constructing. 1m and 1w
+# are defined in the internal Candle contract but not wired up yet.
+ALLOWED_CANDLE_TIMEFRAMES = {
+    Timeframe.FIVE_MIN,
+    Timeframe.FIFTEEN_MIN,
+    Timeframe.ONE_HOUR,
+    Timeframe.FOUR_HOUR,
+    Timeframe.ONE_DAY,
+}
+
+
+def _validated_symbol(symbol: str) -> str:
+    try:
+        return normalize_ticker(symbol)
+    except InvalidTickerError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def _validated_timeframe(timeframe: str) -> Timeframe:
+    try:
+        parsed = Timeframe(timeframe)
+    except ValueError:
+        raise HTTPException(status_code=422, detail=f"Invalid timeframe: {timeframe!r}") from None
+    if parsed not in ALLOWED_CANDLE_TIMEFRAMES:
+        allowed = ", ".join(sorted(t.value for t in ALLOWED_CANDLE_TIMEFRAMES))
+        raise HTTPException(
+            status_code=422,
+            detail=f"Unsupported timeframe {timeframe!r} for this endpoint. Allowed: {allowed}",
+        )
+    return parsed
+
+
+@router.get("/{symbol}/candles", response_model=CandlesResponse)
+def get_candles(
+    symbol: str,
+    timeframe: str = Query("1d"),
+    limit: int = Query(200, ge=1, le=1000),
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> CandlesResponse:
+    validated_symbol = _validated_symbol(symbol)
+    validated_timeframe = _validated_timeframe(timeframe)
+    candles = provider.get_candles(validated_symbol, validated_timeframe, limit=limit)
+    return CandlesResponse(
+        symbol=validated_symbol, timeframe=validated_timeframe.value, candles=candles
+    )
+
+
+@router.get("/{symbol}/quote", response_model=SymbolQuoteResponse)
+def get_quote(
+    symbol: str,
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> SymbolQuoteResponse:
+    validated_symbol = _validated_symbol(symbol)
+    quote = provider.get_latest_quote(validated_symbol)
+    previous_close = provider.get_previous_close(validated_symbol)
+    today_bars = provider.get_candles(validated_symbol, Timeframe.ONE_DAY, limit=1)
+    today = today_bars[-1] if today_bars else None
+    return SymbolQuoteResponse(
+        symbol=validated_symbol, quote=quote, previous_close=previous_close, today=today
+    )
+
+
+@router.get("/{symbol}/features", response_model=FeatureSnapshot)
+def get_features(
+    symbol: str,
+    timeframe: str = Query("1d"),
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> FeatureSnapshot:
+    validated_symbol = _validated_symbol(symbol)
+    validated_timeframe = _validated_timeframe(timeframe)
+    as_of = datetime.now(timezone.utc)
+
+    primary_candles = provider.get_candles(
+        validated_symbol, validated_timeframe, limit=CANDLE_LIMIT_BY_TIMEFRAME[validated_timeframe]
+    )
+    if validated_timeframe == Timeframe.ONE_DAY:
+        daily_candles = primary_candles
+    else:
+        daily_candles = provider.get_candles(
+            validated_symbol, Timeframe.ONE_DAY, limit=CANDLE_LIMIT_BY_TIMEFRAME[Timeframe.ONE_DAY]
+        )
+
+    return compute_feature_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        primary_candles=primary_candles,
+        daily_candles=daily_candles,
+        as_of=as_of,
+    )
+
+
+@router.get("/{symbol}/structure", response_model=MarketStructureSnapshot)
+def get_structure(
+    symbol: str,
+    timeframe: str = Query("1h"),
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> MarketStructureSnapshot:
+    validated_symbol = _validated_symbol(symbol)
+    validated_timeframe = _validated_timeframe(timeframe)
+    as_of = datetime.now(timezone.utc)
+
+    candles = provider.get_candles(
+        validated_symbol, validated_timeframe, limit=CANDLE_LIMIT_BY_TIMEFRAME[validated_timeframe]
+    )
+
+    return compute_market_structure_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        candles=candles,
+        as_of=as_of,
+    )
+
+
+class _CandleCache:
+    """Per-request memoization so a candle/structure timeframe is ever
+    fetched or computed once, shared between /levels and /setups since both
+    need the same multi-timeframe structure context (#39). Deliberately
+    just a dict-backed cache local to a single request -- not a general
+    caching framework, and unrelated to CachedMarketDataProvider's
+    cross-request TTL cache."""
+
+    def __init__(self, provider: MarketDataProvider, symbol: str, as_of: datetime):
+        self._provider = provider
+        self._symbol = symbol
+        self._as_of = as_of
+        self._candles: dict[Timeframe, list] = {}
+        self._structure: dict[Timeframe, MarketStructureSnapshot] = {}
+
+    def candles(self, timeframe: Timeframe) -> list:
+        if timeframe not in self._candles:
+            self._candles[timeframe] = self._provider.get_candles(
+                self._symbol, timeframe, limit=CANDLE_LIMIT_BY_TIMEFRAME[timeframe]
+            )
+        return self._candles[timeframe]
+
+    def structure(self, timeframe: Timeframe) -> MarketStructureSnapshot:
+        if timeframe not in self._structure:
+            self._structure[timeframe] = compute_market_structure_snapshot(
+                self._symbol, timeframe, self.candles(timeframe), self._as_of
+            )
+        return self._structure[timeframe]
+
+
+@router.get("/{symbol}/levels", response_model=SupportResistanceSnapshot)
+def get_levels(
+    symbol: str,
+    timeframe: str = Query("1h"),
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> SupportResistanceSnapshot:
+    validated_symbol = _validated_symbol(symbol)
+    validated_timeframe = _validated_timeframe(timeframe)
+    as_of = datetime.now(timezone.utc)
+    cache = _CandleCache(provider, validated_symbol, as_of)
+
+    daily_candles = cache.candles(Timeframe.ONE_DAY)
+    primary_candles = cache.candles(validated_timeframe)
+
+    source_timeframes = set(LEVEL_SOURCE_TIMEFRAMES) | {validated_timeframe}
+    structure_snapshots = {tf: cache.structure(tf) for tf in source_timeframes}
+
+    return compute_support_resistance_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        primary_candles=primary_candles,
+        daily_candles=daily_candles,
+        structure_snapshots=structure_snapshots,
+        as_of=as_of,
+    )
+
+
+@router.get("/{symbol}/setups", response_model=SetupDetectionSnapshot)
+def get_setups(
+    symbol: str,
+    timeframe: str = Query("1h"),
+    provider: MarketDataProvider = Depends(get_market_data_provider),
+) -> SetupDetectionSnapshot:
+    """Thin orchestration (#39): Market Data -> Features -> Structure ->
+    Support/Resistance -> Setup Detection -> Response. No detection logic
+    lives here; this only assembles the four already-lookahead-safe engine
+    outputs and hands them to compute_setup_detection_snapshot."""
+    validated_symbol = _validated_symbol(symbol)
+    validated_timeframe = _validated_timeframe(timeframe)
+    as_of = datetime.now(timezone.utc)
+    cache = _CandleCache(provider, validated_symbol, as_of)
+
+    daily_candles = cache.candles(Timeframe.ONE_DAY)
+    primary_candles = cache.candles(validated_timeframe)
+
+    feature_snapshot = compute_feature_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        primary_candles=primary_candles,
+        daily_candles=daily_candles,
+        as_of=as_of,
+    )
+
+    structure_timeframes = set(LEVEL_SOURCE_TIMEFRAMES) | {validated_timeframe}
+    structure_by_timeframe = {tf: cache.structure(tf) for tf in structure_timeframes}
+
+    levels_snapshot = compute_support_resistance_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        primary_candles=primary_candles,
+        daily_candles=daily_candles,
+        structure_snapshots=structure_by_timeframe,
+        as_of=as_of,
+    )
+
+    return compute_setup_detection_snapshot(
+        symbol=validated_symbol,
+        timeframe=validated_timeframe,
+        candles=primary_candles,
+        daily_candles=daily_candles,
+        feature_snapshot=feature_snapshot,
+        structure_by_timeframe=structure_by_timeframe,
+        levels_snapshot=levels_snapshot,
+        as_of=as_of,
+    )

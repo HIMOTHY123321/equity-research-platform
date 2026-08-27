@@ -1,0 +1,20 @@
+# Env files — never commit real secrets
+.env
+.env.local
+apps/api/.env
+apps/web/.env.local
+
+# Python
+apps/api/.venv/
+apps/api/**/__pycache__/
+apps/api/**/*.pyc
+apps/api/.pytest_cache/
+apps/api/.ruff_cache/
+
+# OS
+.DS_Store
+
+# Local runtime / generated files
+apps/api/ai_market_desk.db
+node_modules/
+.next/

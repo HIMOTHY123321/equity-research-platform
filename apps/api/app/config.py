@@ -1,0 +1,58 @@
+"""Central application configuration, loaded from environment variables.
+
+No secrets are hard-coded here. Every value has a name matching .env.example.
+"""
+
+from functools import lru_cache
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    # App
+    environment: str = "development"
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
+    cors_origins: str = "http://localhost:3000"
+
+    # Database. Defaults to a local SQLite file so Phase 7 (research-run
+    # persistence) works out of the box with no paid service or local
+    # Postgres install -- override with a Postgres/Supabase URL for anything
+    # beyond solo local development. The Phase 7 research tables are written
+    # to be portable across both dialects (see app/database/models.py); the
+    # Phase 1 tables predate that and are Postgres-only -- see
+    # docs/decisions/0008-setup-ledger-and-replay-engine.md for why they're
+    # left as-is rather than retrofitted. This is the only place a database
+    # path is ever named.
+    database_url: str = "sqlite:///./ai_market_desk.db"
+
+    # Market data provider selection: "yfinance" (default -- no account/key
+    # needed, research/development only) or "alpaca" (requires an eligible
+    # account holder's API credentials below). Never hard-code a choice
+    # elsewhere in the codebase -- always branch on this setting.
+    market_data_provider: str = "yfinance"
+
+    # Alpaca Market Data
+    alpaca_api_key_id: str = ""
+    alpaca_api_secret_key: str = ""
+    alpaca_data_base_url: str = "https://data.alpaca.markets"
+    alpaca_paper: bool = True
+
+    # OpenAI
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+
+    # Scheduling
+    scheduler_shared_secret: str = ""
+    report_timezone: str = "America/New_York"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
