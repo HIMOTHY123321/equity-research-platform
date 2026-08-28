@@ -84,21 +84,27 @@ def test_snapshot_reload_survives_a_fresh_connection_reopening_the_same_file():
 
         engine_a = create_engine(url)
         session_a = sessionmaker(bind=engine_a)()
-        repo_a = SqlAlchemySnapshotRepository(session_a)
-        snapshot_id = repo_a.create_snapshot(**_sample_kwargs())
-        session_a.close()
-        engine_a.dispose()
+        try:
+            repo_a = SqlAlchemySnapshotRepository(session_a)
+            snapshot_id = repo_a.create_snapshot(**_sample_kwargs())
+        finally:
+            session_a.close()
+            engine_a.dispose()
 
         # A brand new engine/session against the same file -- simulates the
         # process restarting entirely, not just a new transaction.
         engine_b = create_engine(url)
         session_b = sessionmaker(bind=engine_b)()
-        repo_b = SqlAlchemySnapshotRepository(session_b)
-        reloaded = repo_b.get_snapshot(snapshot_id)
+        try:
+            repo_b = SqlAlchemySnapshotRepository(session_b)
+            reloaded = repo_b.get_snapshot(snapshot_id)
 
-        assert reloaded is not None
-        assert reloaded.label == "breakout_retest SPY 1H"
-        assert reloaded.config_hash == "abc123"
+            assert reloaded is not None
+            assert reloaded.label == "breakout_retest SPY 1H"
+            assert reloaded.config_hash == "abc123"
+        finally:
+            session_b.close()
+            engine_b.dispose()
 
 
 def test_compare_snapshots_same_config_different_dataset_period():
