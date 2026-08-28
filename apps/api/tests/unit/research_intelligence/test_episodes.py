@@ -229,14 +229,18 @@ def test_anti_leakage_episode_membership_ignores_future_outcomes():
     template = _template_entry()
     ref_ts = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
     entries = [
-        _entry(template, "a", T0, reference_timestamp=ref_ts),
+        _entry(template, "a", T0, reference_timestamp=ref_ts, current_state="rejected"),
         _entry(template, "b", T0 + timedelta(hours=1), reference_timestamp=ref_ts),
     ]
     episodes_before = build_episodes(entries)
 
+    # Wildly different fabricated outcomes -- including flipping which
+    # member "looks best" -- must not change grouping OR which member is
+    # picked as representative (representative selection is fixed at
+    # detection time by qualification state, never by outcome magnitude).
     mutated = [
-        entries[0].model_copy(update={"outcome": _fake_outcome(50.0)}),
-        entries[1].model_copy(update={"outcome": _fake_outcome(-50.0)}),
+        entries[0].model_copy(update={"outcome": _fake_outcome(500.0)}),
+        entries[1].model_copy(update={"outcome": _fake_outcome(-500.0)}),
     ]
     episodes_after = build_episodes(mutated)
 
@@ -244,6 +248,34 @@ def test_anti_leakage_episode_membership_ignores_future_outcomes():
     assert [sorted(e.member_setup_ids) for e in episodes_before] == [
         sorted(e.member_setup_ids) for e in episodes_after
     ]
+    assert [e.representative_setup_id for e in episodes_before] == [
+        e.representative_setup_id for e in episodes_after
+    ]
+
+
+def test_anti_leakage_earlier_episode_membership_is_stable_when_later_entries_are_added():
+    """A future entry must never retroactively change an earlier entry's
+    episode assignment -- membership is decided strictly in chronological
+    order, each entry only ever looking at the entry immediately before it,
+    never at what comes after."""
+    template = _template_entry()
+    ref_ts = datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc)
+    early_entries = [
+        _entry(template, "a", T0, reference_timestamp=ref_ts),
+        _entry(template, "b", T0 + timedelta(hours=1), reference_timestamp=ref_ts),
+    ]
+    membership_early_only = {m.setup_id: m.episode_id for m in build_episode_memberships(early_entries)}
+
+    # A later, structurally-different entry appended after the fact --
+    # a genuinely new/different swing, far enough away not to fall inside
+    # any temporal-proximity window either.
+    later_entries = early_entries + [
+        _entry(template, "c", T0 + timedelta(days=5), reference_timestamp=ref_ts + timedelta(days=5)),
+    ]
+    membership_with_future = {m.setup_id: m.episode_id for m in build_episode_memberships(later_entries)}
+
+    assert membership_with_future["a"] == membership_early_only["a"]
+    assert membership_with_future["b"] == membership_early_only["b"]
 
 
 def test_real_trend_pullback_episodes_group_further_than_the_item0_fix_alone():

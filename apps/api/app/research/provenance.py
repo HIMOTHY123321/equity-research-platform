@@ -13,6 +13,18 @@ from app.research.schemas import DatasetProvenance
 from app.schemas.market_data import Candle
 
 
+def compute_candle_data_hash(candles: list[Candle]) -> str:
+    """The one place this specific fingerprint is computed -- reused by
+    the candle cache (app/market_data/candle_cache.py) so a cache/frozen-
+    dataset hit can be checked for byte-for-byte parity against a fresh
+    fetch using the exact same formula this module already uses for
+    `DatasetProvenance.data_hash`."""
+    digest_source = "|".join(
+        f"{c.timestamp.isoformat()}:{c.open}:{c.high}:{c.low}:{c.close}:{c.volume}" for c in candles
+    )
+    return hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:32]
+
+
 def build_dataset_provenance(
     provider: str,
     symbol: str,
@@ -21,10 +33,7 @@ def build_dataset_provenance(
     requested_end: datetime,
     candles: list[Candle],
 ) -> DatasetProvenance:
-    digest_source = "|".join(
-        f"{c.timestamp.isoformat()}:{c.open}:{c.high}:{c.low}:{c.close}:{c.volume}" for c in candles
-    )
-    data_hash = hashlib.sha256(digest_source.encode("utf-8")).hexdigest()[:32]
+    data_hash = compute_candle_data_hash(candles)
 
     return DatasetProvenance(
         provider=provider,

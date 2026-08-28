@@ -158,3 +158,37 @@ def test_block_bootstrap_unavailable_below_minimum_sample():
     entries = [_template_entry().model_copy(update={"setup_id": "only-one"})]
     result = block_bootstrap_confidence_interval(entries, lambda e: 1.0, "mean", seed=1)
     assert result.available is False
+
+
+def test_anti_leakage_block_grouping_is_a_pure_function_of_timestamp_only():
+    """The block-key functions structurally cannot see outcome data -- each
+    takes a bare timestamp, never a SetupLedgerEntry -- so which entries
+    get resampled together can never depend on outcome magnitude."""
+    import inspect
+
+    from app.research_intelligence.dependence import _block_key_daily, _block_key_weekly
+
+    assert list(inspect.signature(_block_key_daily).parameters) == ["timestamp"]
+    assert list(inspect.signature(_block_key_weekly).parameters) == ["timestamp"]
+
+
+def test_anti_leakage_block_bootstrap_availability_ignores_outcome_magnitude():
+    entries = [_template_entry().model_copy(update={"setup_id": f"e{i}"}) for i in range(60)]
+    entries = [
+        e.model_copy(update={"candidate_candle_timestamp": SPY_1H[0].timestamp + dt.timedelta(hours=i)})
+        for i, e in enumerate(entries)
+    ]
+
+    def real_value_fn(entry):
+        return float(hash(entry.setup_id) % 100) / 10.0
+
+    def fabricated_value_fn(entry):
+        return 999999.0  # wildly different magnitude, same entries/timestamps
+
+    real = block_bootstrap_confidence_interval(entries, real_value_fn, "mean", seed=3)
+    fabricated = block_bootstrap_confidence_interval(entries, fabricated_value_fn, "mean", seed=3)
+    # Same entries/timestamps -> same block structure -> identical
+    # availability and iteration count, regardless of the values inside.
+    assert real.available == fabricated.available
+    assert real.iterations == fabricated.iterations
+    assert real.method == fabricated.method

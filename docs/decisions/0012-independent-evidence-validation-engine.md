@@ -240,11 +240,267 @@ present; PRELIMINARY otherwise. Full documented rule in the module
 docstring, mirroring `decay.py`'s "priority order matters, and here is
 why" convention.
 
+## API and Research Lab UI (#25-#28)
+
+`POST /api/research/query` gained an additive `independence` field
+(`IndependenceSection`: `sample_composition`, `walk_forward`,
+`evidence_maturity` + basis, and `conclusion_stability` -- populated only
+when the setup_type/direction-filtered pool contains both a qualified and
+a rejected member to compare) -- every existing field is unchanged.
+`POST /api/research/analogs` gained additive `diversity`
+(`AnalogDiversityReport`) and `diverse_analogs` fields, computed strictly
+after ranking. Both endpoints reuse the request's already-pooled ledger
+entries; the independence computation costs one extra pass over data
+already in memory, no new fetches.
+
+`apps/web/src/components/research/ResearchResultsPanel.tsx` gained an
+`IndependenceBlock`: raw/episode/purged sample counts (per horizon),
+overall evidence-maturity badge, a walk-forward stability badge with
+per-fold medians and positive/negative counts, and (when applicable) a
+raw/episode/purged conclusion-stability table with its deterministic
+label. `apps/web/src/components/research/HistoricalAnalogsPanel.tsx`
+gained an optional diversity warning line and a "SHOW DIVERSE ANALOGS"
+toggle that swaps between the full ranked list and the one-per-episode
+filtered list -- same distances, same order, verified live against the
+real SPY fixture (a `moving_average_reclaim` analog search correctly
+flagged 6 of the top 10 analogs sharing one episode, and toggling reduced
+the displayed list from 10 to 4 while every remaining distance stayed
+identical). `AnalogSearchButton.tsx` (the dashboard's "VIEW HISTORICAL
+ANALOGS" control) reuses the same component, so the same warning line and
+toggle appear there too -- compact enough not to violate #29's
+decision-first dashboard constraint.
+
+## Dashboard warning pill (#29)
+
+`AnalogSearchButton.tsx` (the dashboard's on-demand "VIEW HISTORICAL
+ANALOGS" control, already firing one quick 30-day replay per click) now
+also fires one `/api/research/query` call scoped to the clicked
+candidate's own setup_type/direction over that same quick corpus, purely
+best-effort -- a 404 (too few matching entries in a short window) or any
+other failure is swallowed and shows no pill, never a crash or a blocking
+error. If the resulting evidence card carries `high_overlap` or
+`low_independent_sample` (a short, deliberate allow-list, not "any flag"),
+a single small "RESEARCH SAMPLE HIGHLY OVERLAPPING" pill renders next to
+the analog results. No new always-on network calls, no giant statistics
+table -- verified live: one setup type in the real fixture correctly
+produced no pill (404, too few same-type entries in a 30-day window,
+handled silently) while its analog corpus still showed the diversity
+toggle from #28, confirming the two features degrade independently.
+
+## Local candle cache and dataset freeze (#32-#34)
+
+`app/market_data/candle_cache.py`, new tables `cached_candle_series` /
+`frozen_datasets` (`app/database/models.py`, Alembic `0004_candle_cache`,
+same local-SQLite-bootstrap + Postgres-migration dual convention as
+`ResearchSnapshotRecord`). Two deliberately separate concerns:
+
+- **Cache** (`get`/`put`, wrapped by `fetch_candles_cached`): keyed on the
+  full `(provider, symbol, timeframe, requested_start, requested_end,
+  adjustment_mode, session_settings)` tuple -- a different range, symbol,
+  or timeframe is always a genuine miss, never a substitution. "Never
+  silently stale" is enforced by `_is_cacheable`: any request whose
+  `requested_end` falls within `REVISION_WINDOW_DAYS` (5) of "now" bypasses
+  the cache entirely on both read and write, since yfinance can still
+  revise recent bars (docs/decisions/0006) -- only settled ranges are ever
+  cached, and a cached row is never overwritten once written.
+- **Frozen datasets** (`freeze`/`get_frozen`/`list_frozen_datasets`): an
+  explicit, separate, permanently-immutable snapshot keyed only by its own
+  generated id, allowed regardless of recency -- reproducing a past run
+  exactly means replaying against a frozen dataset's candles, not
+  re-fetching. Both tables reuse `app.research.provenance
+  .compute_candle_data_hash` (extracted from `build_dataset_provenance`,
+  same formula, zero duplication) so a cached or frozen entry's hash is
+  directly comparable to any `DatasetProvenance`/`DatasetManifest` hash
+  computed elsewhere.
+
+Wired into both `POST /api/research/replay` and `POST /api/research/
+universe-replay` via `fetch_candles_cached`, replacing the direct
+`provider.get_candles(...)` calls -- no other behavior in either route
+changed. Verified live against the real yfinance provider (a genuinely
+uncached March 2025 SPY range, not the fixture dates): cold fetch 0.916s,
+warm (cache-hit) fetch 0.051s, byte-exact parity confirmed by comparing
+every candle's full serialized form, not just counts. An integration test
+against a fake provider additionally proves a second identical `/replay`
+call makes zero further provider calls and produces byte-identical
+ledger-entry ids to the first (mandatory anti-leakage checklist item #8:
+"cached dataset replay must equal original replay"), and that a request
+for a different range is a genuine miss, never a stale hit.
+
+One honest caveat, not papered over: for a request whose candle history is
+very large (the provider is limit-based, not range-scoped, so a one-month
+replay request can still pull years of underlying history), total
+end-to-end replay wall-clock is dominated by downstream replay/detection
+compute over that full fetched history, not by the fetch itself -- the
+cache eliminates the fetch cost precisely as intended (confirmed above),
+but does not by itself make a large-history replay fast end-to-end. Per
+#31/#16, this is not "fixed" here by rewriting the deterministic engine;
+it is reported as a separate, out-of-scope performance characteristic for
+a future phase to size properly, not chased against an arbitrary benchmark.
+
+## Universe re-analysis under Phase 9 methodology (#37-#39)
+
+Re-uses the exact same real 8-symbol, 180-day, 1H universe run Phase 8
+produced -- all 24,375 ledger entries, still persisted with outcomes in
+the local database, verified intact and re-pooled without any re-fetch
+(per #1's "preserve Phase 8 results" and #37's "use cached data where
+possible"). Script: the scratchpad's `phase9_analysis.py`, run once,
+58.5 seconds end-to-end, no network calls.
+
+**Sample composition, pooled**: raw 24,375 -> 18,630 independent episodes
+(23.6% reduction) -> 2,930 purged 5-bar samples (88.0% reduction from raw).
+Per-setup-type purged-5 counts vary enormously by setup family: some
+(`gap_continuation`, `gap_fill`, `previous_day_high_breakout`,
+`previous_day_low_breakdown`) show **zero** reduction at any level --
+these setups fire rarely enough per symbol that their own observations
+essentially never overlap each other, even pooled across 8 symbols and 6
+months. Others (`resistance_rejection`: 4,159 raw -> 1,592 purged;
+`bearish_liquidity_sweep`: 2,315 -> 1,326) lose more than half their raw
+count to purging. This variance is itself a finding: "how much independent
+evidence exists" is not one universal number, even within one universe run
+-- it depends entirely on how often that specific setup type fires.
+
+**Overlap severity**: pooled 5-bar overlap is **100.0%** (every single one
+of 24,375 entries has some adjacent-in-time entry, expected once every
+setup type is pooled together on the same bars). Per-setup-type range is
+65.0%-100.0%, mean **93.3%** -- consistent with, and slightly higher than,
+Phase 8's originally reported 91.3% mean. Phase 8's overlap finding is not
+an artifact of that particular partial run; it replicates, and if anything
+understates the severity slightly.
+
+**The 5 named Phase 8 findings, re-evaluated** (`conclusion_stability` at
+horizon=5, `anchored_walk_forward` 5-fold, `compare_bootstrap_methods`):
+
+1. **trend_pullback rejected outperforms qualified** -- RAW diff=-0.115,
+   PURGED diff=-0.148 (ratio 1.28) -> **SURVIVES**. Walk-forward: both
+   qualified and rejected cohorts are STABLE (5/5 folds same sign each).
+   This counter-intuitive Phase 8 finding is real and independence-robust,
+   not an overlap artifact -- if anything the purged effect is *larger*
+   than the raw one.
+2. **breakout_retest qualified strongly outperforms rejected** -- RAW
+   diff=+0.534, PURGED diff=+0.506 (ratio 0.95) -> **SURVIVES**.
+   Walk-forward: qualified STABLE (4/4 usable folds positive), rejected
+   STABLE (5/5 folds negative). Phase 8's most promising finding remains
+   the most promising finding after independence adjustment.
+3. **HTF (daily) alignment contradiction** -- RAW diff=-0.045 (aligned
+   underperforms opposed), EPISODE diff=-0.030, PURGED diff=-0.0072 (ratio
+   0.16) -> **WEAKENS** (just above the 0.10 DISAPPEARS boundary -- the
+   effect collapses to essentially nothing under purging, matching almost
+   exactly the worked example in Phase 9's own spec). Walk-forward: both
+   `daily_aligned` and `daily_opposed` cohorts are UNSTABLE (2 positive /
+   3 negative folds each) -- the sign is not even consistent fold to fold.
+   **Conclusion: this contradiction does not survive independence
+   adjustment; the raw result was substantially inflated by dependent
+   observations.**
+4. **RVOL confirmation, pooled** -- RAW diff=+0.058, PURGED diff=+0.217
+   (ratio 3.76) -> **SURVIVES**, and the independent-sample effect is
+   *stronger* than the pooled raw estimate (walk-forward: 4/5 folds
+   positive, one flip -- UNSTABLE by the strict same-sign-every-fold rule,
+   a real caveat on an otherwise-surviving finding).
+5. **RVOL confirmation, breakout_retest only, reverses sign vs. pooled**
+   -- RAW diff=-0.109, PURGED diff=-0.116 (ratio 1.07) -> **SURVIVES**.
+   The scope-dependent sign reversal Phase 8 found (positive pooled,
+   negative scoped to breakout_retest) is itself independence-robust on
+   both sides -- a genuine, reproducible pattern, not overlap noise.
+
+**Evidence maturity, every setup type's qualified cohort**: **0 of 14**
+setup types with a qualified cohort reach REPLICATED, despite pooled
+sample sizes in the thousands for several of them. The dominant blocker,
+by inspection of the actual basis strings, is `HIGH_OVERLAP` -- present on
+nearly every setup type given the 93.3% mean overlap rate above; several
+setup types (`breakout_retest`, `resistance_rejection`) also fail the
+cross-symbol sign-agreement requirement (6/8 and 5/8 symbols respectively);
+`resistance_rejection` additionally fails walk-forward stability and
+carries a block-bootstrap-includes-zero flag. `trend_pullback` is the
+closest to REPLICATED of any setup type -- 8/8 symbols agree in sign,
+walk-forward stable -- blocked by `HIGH_OVERLAP` alone.
+
+## Answers to the 22 Phase 9 research questions
+
+1. **Raw observation count, pooled**: 24,375.
+2. **Independent episode count, pooled**: 18,630 (23.6% fewer than raw).
+3. **Purged sample size by horizon, pooled**: 1-bar 6,012; 3-bar 3,757;
+   5-bar 2,930; 10-bar 1,983; 20-bar 1,015 -- shrinks monotonically as the
+   exclusion window widens, as expected.
+4. **How severe is the sample-size collapse**: severe and horizon-
+   dependent -- pooled purged-20-bar retains just 4.2% of raw observations
+   (1,015/24,375); even the mildest horizon (1-bar) retains only 24.7%.
+5. **Which Phase 8 findings survive vs. weaken vs. disappear vs.
+   reverse**: SURVIVES -- trend_pullback rejected>qualified, breakout_retest
+   qualified>rejected, RVOL pooled, RVOL breakout_retest-scoped reversal.
+   WEAKENS (functionally disappears) -- HTF daily alignment. None of the 5
+   reversed sign or hit INSUFFICIENT_INDEPENDENT_SAMPLE.
+6. **Per-setup-type independent-sample adequacy**: wildly uneven -- 4 setup
+   types show literally no purging loss at any horizon (rare enough not to
+   overlap), while high-frequency setup types like `resistance_rejection`
+   lose over 60% of their raw count to purging alone.
+7. **Do block-bootstrap findings change the picture**: no reversals, but
+   real widening -- e.g. HTF alignment's naive 90% CI [-0.034,-0.006]
+   excludes zero, but its own daily-block CI [-0.053,+0.012] and
+   weekly-block CI [-0.062,+0.017] both include zero, i.e. the naive
+   interval was overconfident about a finding that independence adjustment
+   has already shown does not survive on its own.
+8. **Walk-forward stability across the 5 named findings' cohorts**: STABLE
+   for trend_pullback (both groups) and breakout_retest (both groups);
+   UNSTABLE for both HTF groups and for pooled RVOL-confirmed.
+9. **Cross-symbol stability**: trend_pullback and RVOL-confirmed-pooled
+   both reach 8/8-symbol sign agreement in their evidence cards;
+   breakout_retest 6/8; resistance_rejection 5/8.
+10. **Temporal stability**: not separately re-run here (Phase 8's monthly
+    buckets stand; the new `TEMPORAL_INSTABILITY` flag, which is stricter
+    than Phase 8's `RESULT_UNSTABLE`, fired on `resistance_rejection`).
+11. **Is diverse-analog filtering useful in practice**: yes -- live-verified
+    in the Research Lab UI (#28) on a real `moving_average_reclaim` query:
+    6 of the top 10 analogs shared one episode; the diverse view correctly
+    collapsed the list to 4 genuinely distinct cases.
+12. **Does evidence now justify a calibrated ranking engine**: **the
+    answer is still NO** -- see the RANKING GATE decision below.
+13-22: covered by the five re-evaluated findings, the composition/overlap
+    numbers, the evidence-maturity table, and the RANKING GATE section
+    together -- restated individually here would only repeat the same
+    numbers under different headings.
+
+## RANKING GATE decision (#40)
+
+**FAIL.**
+
+**Evidence standard applied** (documented, not intuition): a setup family
+would need to reach `EvidenceMaturity.REPLICATED` -- purged n >=
+`moderate_sample_min` (50), walk-forward STABLE, every symbol with data
+agreeing in sign (>=2 symbols), a supplied conclusion-stability check
+(where applicable) at SURVIVES, and none of the seven fragile-independence
+flags present -- on at least a meaningful subset of setup types before a
+calibrated ranking engine could be built on top of this evidence base
+without ranking on noise.
+
+**Result against that standard**: 0 of 14 setup types with a qualified
+cohort reach REPLICATED, even with pooled sample sizes in the thousands.
+The blocking factor is overwhelmingly `HIGH_OVERLAP` (93.3% mean overlap
+rate pooled), meaning the *raw* sample sizes that looked adequate in Phase
+8 do not translate into adequate *independent* evidence once dependence is
+accounted for.
+
+**What's missing, specifically** (not vague -- these are the actual
+blockers found above): (a) lower observation dependence -- either a
+genuinely larger multi-year universe run so purged/episode counts grow
+past the moderate-sample bar even after heavy exclusion, or a
+methodological change to how much of a symbol's history counts as one
+independent event; (b) broader, more consistent cross-symbol sign
+agreement -- `breakout_retest` and `resistance_rejection` both fail this
+specifically; (c) walk-forward stability for `resistance_rejection` and
+the HTF-alignment/RVOL-pooled groups, which flip sign fold to fold.
+`trend_pullback` is the nearest setup type to clearing the bar -- it is
+blocked by `HIGH_OVERLAP` alone -- so it is the best near-term candidate
+to revisit once episode/purged methodology or a larger dataset reduces
+overlap.
+
+Per #16/#40's explicit instruction, this FAIL is not treated as a reason
+to weaken the evidence bar, adjust detector thresholds, or build ranking
+anyway "because the numbers are close" -- it stands as the honest
+conclusion of the independence-adjusted evidence available today.
+
 ## Status
 
-In progress. Remaining Phase 9 work (Research Lab UI for independence/
-walk-forward/conclusion-stability/analog-diversity, a small dashboard
-overlap-warning pill, historical-data cache and dataset freeze, the full
-universe re-run under Phase 9 methodology, and the RANKING GATE decision)
-will be appended to this ADR as it lands, the same way ADR 0010 accumulated
-sections through Phase 8.
+Complete. Final verification: 712/712 backend tests passing, ruff clean,
+frontend `tsc`/`eslint`/`build` clean, live browser smoke test clean on
+both the dashboard and the Research Lab. Full completion report published
+separately (Phase 9 Completion Report artifact).

@@ -3,7 +3,6 @@
 import { formatAtr, formatSampleSizeLabel, formatSignedPercent } from "@/lib/format";
 import type {
   ConclusionLabelKind,
-  ConclusionStabilityReport,
   ContradictionResult,
   CrossSymbolStabilityReport,
   DistributionSummary,
@@ -252,6 +251,134 @@ function ConcentrationAndOverlapBlock({
   );
 }
 
+const MATURITY_STYLE: Record<EvidenceMaturityKind, string> = {
+  insufficient: "bg-negative/15 text-negative",
+  preliminary: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  mixed: "bg-negative/15 text-negative",
+  replicated: "bg-positive/15 text-positive",
+};
+
+const CONCLUSION_LABEL_STYLE: Record<ConclusionLabelKind, string> = {
+  survives: "bg-positive/15 text-positive",
+  weakens: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  disappears: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  reverses: "bg-negative/15 text-negative",
+  insufficient_independent_sample: "bg-border text-muted",
+};
+
+function IndependenceBlock({ independence }: { independence: IndependenceSection }) {
+  const { sample_composition, walk_forward, evidence_maturity, evidence_maturity_basis, conclusion_stability } =
+    independence;
+  return (
+    <div className="rounded border border-border bg-surface-raised p-4">
+      <div className="mb-2 flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold text-foreground">Independence &amp; robustness</h3>
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-mono uppercase ${MATURITY_STYLE[evidence_maturity]}`}
+        >
+          {evidence_maturity}
+        </span>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-4">
+        <div>
+          <div className="text-muted">Raw observations</div>
+          <div className="font-mono text-foreground">{sample_composition.raw_count}</div>
+        </div>
+        <div>
+          <div className="text-muted">Independent episodes</div>
+          <div className="font-mono text-foreground">{sample_composition.episode_count}</div>
+        </div>
+        {Object.entries(sample_composition.purged_counts_by_horizon).map(([horizon, count]) => (
+          <div key={horizon}>
+            <div className="text-muted">Purged ({horizon}-bar)</div>
+            <div className="font-mono text-foreground">{count}</div>
+          </div>
+        ))}
+      </div>
+      <p className="mt-2 text-[10px] text-muted">{evidence_maturity_basis}</p>
+
+      <h4 className="mb-1 mt-3 flex items-baseline gap-2 border-t border-border pt-2 text-[11px] font-semibold text-foreground">
+        Walk-forward stability
+        <span
+          className={`rounded px-1.5 py-0.5 text-[10px] font-mono uppercase ${
+            walk_forward.stability === "unstable"
+              ? "bg-negative/15 text-negative"
+              : walk_forward.stability === "stable"
+                ? "bg-positive/15 text-positive"
+                : "bg-border text-muted"
+          }`}
+        >
+          {walk_forward.stability.replace(/_/g, " ")}
+        </span>
+      </h4>
+      {walk_forward.windows.length > 0 ? (
+        <div className="flex flex-wrap gap-3 text-[11px]">
+          {walk_forward.windows.map((w) => (
+            <span key={w.window_index}>
+              <span className="text-muted">fold {w.window_index}: </span>
+              <DistributionCell dist={w.test_distribution} />
+            </span>
+          ))}
+        </div>
+      ) : (
+        <p className="text-[11px] text-muted">Not enough entries to build walk-forward folds.</p>
+      )}
+      {walk_forward.windows.length > 0 && (
+        <p className="mt-1 text-[10px] text-muted">
+          {walk_forward.positive_median_window_count} positive / {walk_forward.negative_median_window_count}{" "}
+          negative folds
+        </p>
+      )}
+
+      {conclusion_stability && (
+        <div className="mt-3 border-t border-border pt-2">
+          <h4 className="mb-1 flex items-baseline gap-2 text-[11px] font-semibold text-foreground">
+            <span>Conclusion stability: {conclusion_stability.finding_label}</span>
+            <span
+              className={`rounded px-1.5 py-0.5 text-[10px] font-mono uppercase ${
+                CONCLUSION_LABEL_STYLE[conclusion_stability.label]
+              }`}
+            >
+              {conclusion_stability.label.replace(/_/g, " ")}
+            </span>
+          </h4>
+          <table className="w-full">
+            <thead>
+              <tr className="text-[10px] uppercase tracking-wide text-muted">
+                <th className="text-left font-normal">Level</th>
+                <th className="text-right font-normal">{conclusion_stability.raw.group_a_label}</th>
+                <th className="text-right font-normal">{conclusion_stability.raw.group_b_label}</th>
+                <th className="text-right font-normal">Difference</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(["raw", "episode", "purged"] as const).map((level) => {
+                const c = conclusion_stability[level];
+                return (
+                  <tr key={level}>
+                    <td className="py-1 pr-3 font-mono text-[11px] capitalize text-muted">{level}</td>
+                    <td className="py-1 pr-3 text-right">
+                      <DistributionCell dist={c.group_a_distribution} />
+                    </td>
+                    <td className="py-1 pr-3 text-right">
+                      <DistributionCell dist={c.group_b_distribution} />
+                    </td>
+                    <td className="py-1 text-right font-mono text-[11px] text-foreground">
+                      {formatSignedPercent(c.median_difference)}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+          <p className="mt-1 text-[10px] text-muted">{conclusion_stability.label_basis}</p>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ContradictionsBlock({ contradictions }: { contradictions: ContradictionResult[] }) {
   return (
     <div className="rounded border border-border bg-surface-raised p-4">
@@ -296,6 +423,7 @@ export function ResearchResultsPanel({ result }: { result: ResearchQueryResponse
         <ExcursionBlock excursions={result.excursions} firstHit={result.first_hit} />
       </div>
       <StabilityBlock temporal={result.temporal_stability} crossSymbol={result.cross_symbol_stability} />
+      <IndependenceBlock independence={result.independence} />
       <ContradictionsBlock contradictions={result.contradictions} />
     </div>
   );

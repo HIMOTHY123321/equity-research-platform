@@ -21,6 +21,8 @@ EXPECTED_TABLES = {
     "setup_ledger_entries",
     "setup_outcomes",
     "research_snapshots",
+    "cached_candle_series",
+    "frozen_datasets",
 }
 
 

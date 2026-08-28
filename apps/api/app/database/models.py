@@ -464,3 +464,63 @@ class ResearchSnapshotRecord(Base):
     statistical_output: Mapped[dict] = mapped_column(JSON)
     warning_flags: Mapped[list] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CachedCandleSeriesRecord(Base):
+    """Phase 9 (#32-#34): a locally cached candle series for one exact
+    (provider, symbol, timeframe, requested_start, requested_end,
+    adjustment_mode, session_settings) key -- never a partial/generic
+    per-symbol cache. `fetched_at` lets the repository enforce "never
+    silently stale": a request whose `requested_end` falls inside the
+    still-revisable recent window always bypasses this table entirely
+    (app/market_data/candle_cache.py), so a hit here is never served for
+    data that could have since changed at the provider."""
+
+    __tablename__ = "cached_candle_series"
+    __table_args__ = (
+        UniqueConstraint(
+            "provider",
+            "symbol",
+            "timeframe",
+            "requested_start",
+            "requested_end",
+            "adjustment_mode",
+            "session_settings",
+            name="uq_candle_cache_key",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8))
+    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    requested_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    adjustment_mode: Mapped[str] = mapped_column(String(32))
+    session_settings: Mapped[str] = mapped_column(String(64))
+    candles: Mapped[list] = mapped_column(JSON)
+    data_hash: Mapped[str] = mapped_column(String(32))
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class FrozenDatasetRecord(Base):
+    """Phase 9 (#33): an explicit, permanently-immutable snapshot of a
+    candle series, keyed only by its own generated id -- never by the
+    request tuple, so it is never invalidated or overwritten by a later
+    fetch of the "same" range. Reproducing a past research run exactly
+    means replaying against a frozen dataset's candles, not re-fetching."""
+
+    __tablename__ = "frozen_datasets"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    label: Mapped[str] = mapped_column(String(200))
+    provider: Mapped[str] = mapped_column(String(32))
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8))
+    requested_start: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    requested_end: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    adjustment_mode: Mapped[str] = mapped_column(String(32))
+    session_settings: Mapped[str] = mapped_column(String(64))
+    candles: Mapped[list] = mapped_column(JSON)
+    data_hash: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

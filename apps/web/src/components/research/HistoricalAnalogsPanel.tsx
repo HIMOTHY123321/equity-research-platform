@@ -3,7 +3,7 @@
 import { useState } from "react";
 
 import { formatSignedPercent } from "@/lib/format";
-import type { AnalogResult } from "@/lib/types";
+import type { AnalogDiversityReport, AnalogResult } from "@/lib/types";
 
 function AnalogRow({ analog }: { analog: AnalogResult }) {
   const [expanded, setExpanded] = useState(false);
@@ -73,15 +73,45 @@ function AnalogRow({ analog }: { analog: AnalogResult }) {
   );
 }
 
-export function HistoricalAnalogsPanel({ analogs }: { analogs: AnalogResult[] }) {
+export function HistoricalAnalogsPanel({
+  analogs,
+  diversity,
+  diverseAnalogs,
+}: {
+  analogs: AnalogResult[];
+  diversity?: AnalogDiversityReport;
+  diverseAnalogs?: AnalogResult[];
+}) {
+  const [showDiverse, setShowDiverse] = useState(false);
   if (analogs.length === 0) {
     return <p className="text-[11px] text-muted">No analogs found in the selected corpus.</p>;
   }
+  // (#21) Same distance-sorted list, same underlying similarity calc --
+  // toggling only switches which already-computed list is displayed.
+  const canShowDiverse = diverseAnalogs !== undefined && diverseAnalogs.length < analogs.length;
+  const displayed = showDiverse && diverseAnalogs ? diverseAnalogs : analogs;
+
   return (
     <div>
-      <h3 className="mb-2 text-sm font-semibold text-foreground">Similar historical setups</h3>
+      <div className="mb-2 flex items-baseline justify-between">
+        <h3 className="text-sm font-semibold text-foreground">Similar historical setups</h3>
+        {canShowDiverse && (
+          <button
+            type="button"
+            onClick={() => setShowDiverse((v) => !v)}
+            className="rounded border border-accent px-2 py-0.5 font-mono text-[10px] font-semibold text-accent"
+          >
+            {showDiverse ? "SHOW ALL ANALOGS" : "SHOW DIVERSE ANALOGS"}
+          </button>
+        )}
+      </div>
+      {diversity?.warning && (
+        <p className="mb-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
+          {diversity.warning}
+        </p>
+      )}
       <ul className="space-y-1.5">
-        {analogs.map((a) => (
+        {displayed.map((a) => (
           <AnalogRow key={a.setup_id} analog={a} />
         ))}
       </ul>

@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -257,3 +259,117 @@ def test_snapshot_create_get_and_compare_round_trip(client):
 def test_get_unknown_snapshot_is_404(client):
     response = client.get("/api/research/snapshots/00000000-0000-0000-0000-000000000000")
     assert response.status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# Candle cache (Phase 9 #32-#34): a second identical replay must not refetch
+# candles from the provider, and must produce byte-identical ledger content.
+# The cache only ever serves settled (not-recently-revisable) ranges, so
+# these tests shift the real fixture's timestamps ~400 days into the past
+# (OHLCV and relative spacing untouched -- setup detection only cares about
+# relative price action) rather than using the fixture's real, deliberately
+# recent dates, which fall inside the revision window by design.
+# ---------------------------------------------------------------------------
+
+_SHIFT = timedelta(days=400)
+SPY_1H_OLD = [c.model_copy(update={"timestamp": c.timestamp - _SHIFT}) for c in SPY_1H]
+SPY_1D_OLD = [c.model_copy(update={"timestamp": c.timestamp - _SHIFT}) for c in SPY_1D]
+
+
+class OldFixtureProvider(MarketDataProvider):
+    _BY_SYMBOL_TIMEFRAME = {
+        ("SPY", "1h"): SPY_1H_OLD,
+        ("SPY", "1d"): SPY_1D_OLD,
+        ("SPY", "4h"): SPY_1H_OLD,
+    }
+
+    def __init__(self):
+        self.call_count = 0
+
+    def get_candles(self, symbol, timeframe, limit=200):
+        self.call_count += 1
+        candles = self._BY_SYMBOL_TIMEFRAME.get((symbol, timeframe.value), [])
+        return candles[-limit:]
+
+    def get_latest_quote(self, symbol):
+        raise NotImplementedError
+
+    def get_previous_close(self, symbol):
+        raise NotImplementedError
+
+
+@pytest.fixture
+def old_fixture_client():
+    engine = create_engine(
+        "sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool
+    )
+    session_factory = sessionmaker(bind=engine)
+    provider = OldFixtureProvider()
+
+    def _get_db_override():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    app.dependency_overrides[get_db] = _get_db_override
+    app.dependency_overrides[get_market_data_provider] = lambda: provider
+    yield TestClient(app), provider
+    app.dependency_overrides.pop(get_db, None)
+    app.dependency_overrides.pop(get_market_data_provider, None)
+
+
+def test_second_identical_replay_is_served_entirely_from_cache_with_exact_parity(old_fixture_client):
+    client, provider = old_fixture_client
+    body = {
+        "symbol": "SPY",
+        "timeframe": "1h",
+        "start": SPY_1H_OLD[0].timestamp.isoformat(),
+        "end": SPY_1H_OLD[-1].timestamp.isoformat(),
+    }
+
+    first = client.post("/api/research/replay", json=body)
+    assert first.status_code == 200, first.text
+    first_run_id = first.json()["run_id"]
+    calls_after_first_run = provider.call_count
+    assert calls_after_first_run == 3  # primary (1h) + daily + four_hour, each a genuine miss
+
+    second = client.post("/api/research/replay", json=body)
+    assert second.status_code == 200, second.text
+    second_run_id = second.json()["run_id"]
+    # Every one of the three candle series came from the cache -- zero new
+    # provider calls for an identical (symbol, timeframe, range) request.
+    assert provider.call_count == calls_after_first_run
+
+    first_summary = client.get(f"/api/research/runs/{first_run_id}/summary").json()
+    second_summary = client.get(f"/api/research/runs/{second_run_id}/summary").json()
+    assert first_summary["bars_processed"] == second_summary["bars_processed"]
+    assert first_summary["bars_processed"] > 0
+    assert first_summary["qualified_count"] == second_summary["qualified_count"]
+    assert first_summary["rejected_count"] == second_summary["rejected_count"]
+
+    first_entries = client.get(f"/api/research/runs/{first_run_id}/setups", params={"limit": 500}).json()
+    second_entries = client.get(f"/api/research/runs/{second_run_id}/setups", params={"limit": 500}).json()
+    first_ids = sorted(e["setup_id"] for e in first_entries["entries"])
+    second_ids = sorted(e["setup_id"] for e in second_entries["entries"])
+    assert first_ids == second_ids  # deterministic setup ids, byte-identical cohort
+
+
+def test_a_different_range_is_a_genuine_cache_miss_not_a_stale_hit(old_fixture_client):
+    client, provider = old_fixture_client
+    full_body = {
+        "symbol": "SPY",
+        "timeframe": "1h",
+        "start": SPY_1H_OLD[0].timestamp.isoformat(),
+        "end": SPY_1H_OLD[-1].timestamp.isoformat(),
+    }
+    client.post("/api/research/replay", json=full_body)
+    calls_after_first = provider.call_count
+
+    shorter_body = dict(full_body, end=SPY_1H_OLD[len(SPY_1H_OLD) // 2].timestamp.isoformat())
+    response = client.post("/api/research/replay", json=shorter_body)
+    assert response.status_code == 200, response.text
+    # A different requested_end is a different cache key entirely -- this
+    # must hit the provider again, never silently reuse the wider range.
+    assert provider.call_count > calls_after_first

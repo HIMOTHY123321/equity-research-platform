@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_market_data_provider
 from app.config import get_settings
 from app.database.session import get_db
+from app.market_data.candle_cache import SqlAlchemyCandleCacheRepository, fetch_candles_cached
 from app.market_data.provider import MarketDataProvider
 from app.research.engine import execute_research_run
 from app.research.repository import ResearchRunNotFoundError, SqlAlchemyResearchRepository
@@ -64,11 +65,16 @@ def _repository(db: Session = Depends(get_db)) -> SqlAlchemyResearchRepository:
     return SqlAlchemyResearchRepository(db)
 
 
+def _candle_cache_repository(db: Session = Depends(get_db)) -> SqlAlchemyCandleCacheRepository:
+    return SqlAlchemyCandleCacheRepository(db)
+
+
 @router.post("/replay", response_model=ReplayResponse)
 def run_replay(
     body: ReplayRequest,
     provider: MarketDataProvider = Depends(get_market_data_provider),
     repository: SqlAlchemyResearchRepository = Depends(_repository),
+    candle_cache: SqlAlchemyCandleCacheRepository = Depends(_candle_cache_repository),
 ) -> ReplayResponse:
     try:
         symbol = normalize_ticker(body.symbol)
@@ -98,16 +104,22 @@ def run_replay(
     except InvalidReplayRangeError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    primary_candles = provider.get_candles(symbol, timeframe, limit=_FETCH_LIMIT)
+    primary_candles = fetch_candles_cached(
+        provider, candle_cache, provider_name, symbol, timeframe, start, end, _FETCH_LIMIT
+    )
     daily_candles = (
         primary_candles
         if timeframe == Timeframe.ONE_DAY
-        else provider.get_candles(symbol, Timeframe.ONE_DAY, limit=_FETCH_LIMIT)
+        else fetch_candles_cached(
+            provider, candle_cache, provider_name, symbol, Timeframe.ONE_DAY, start, end, _FETCH_LIMIT
+        )
     )
     four_hour_candles = (
         primary_candles
         if timeframe == Timeframe.FOUR_HOUR
-        else provider.get_candles(symbol, Timeframe.FOUR_HOUR, limit=_FETCH_LIMIT)
+        else fetch_candles_cached(
+            provider, candle_cache, provider_name, symbol, Timeframe.FOUR_HOUR, start, end, _FETCH_LIMIT
+        )
     )
 
     try:

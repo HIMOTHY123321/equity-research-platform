@@ -17,6 +17,7 @@ import {
   postUniverseReplay,
 } from "@/lib/api";
 import type {
+  AnalogDiversityReport,
   AnalogResult,
   ResearchQueryResponse,
   ResearchRun,
@@ -71,6 +72,8 @@ export default function ResearchLabPage() {
   const [selectedEntryId, setSelectedEntryId] = useState("");
   const [entryFilter, setEntryFilter] = useState("");
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
+  const [analogDiversity, setAnalogDiversity] = useState<AnalogDiversityReport | null>(null);
+  const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
   const [analogStatus, setAnalogStatus] = useState<AsyncStatus>("idle");
   const [analogError, setAnalogError] = useState<string | null>(null);
 
@@ -159,6 +162,8 @@ export default function ResearchLabPage() {
     try {
       const res = await postAnalogQuery(entry.detection, runIds, 10);
       setAnalogs(res.analogs);
+      setAnalogDiversity(res.diversity);
+      setDiverseAnalogs(res.diverse_analogs);
       setAnalogStatus("completed");
     } catch (err) {
       setAnalogError(err instanceof ApiError ? err.message : "Analog query failed");
@@ -425,7 +430,13 @@ export default function ResearchLabPage() {
                 {analogError}
               </div>
             )}
-            {analogStatus === "completed" && analogs && <HistoricalAnalogsPanel analogs={analogs} />}
+            {analogStatus === "completed" && analogs && (
+              <HistoricalAnalogsPanel
+                analogs={analogs}
+                diversity={analogDiversity ?? undefined}
+                diverseAnalogs={diverseAnalogs ?? undefined}
+              />
+            )}
           </section>
         )}
 

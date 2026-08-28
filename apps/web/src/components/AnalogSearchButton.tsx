@@ -3,8 +3,21 @@
 import { useState } from "react";
 
 import { HistoricalAnalogsPanel } from "@/components/research/HistoricalAnalogsPanel";
-import { ApiError, postAnalogQuery, postReplay } from "@/lib/api";
-import type { AnalogResult, SetupCandidate, Timeframe } from "@/lib/types";
+import { ApiError, postAnalogQuery, postReplay, postResearchQuery } from "@/lib/api";
+import type {
+  AnalogDiversityReport,
+  AnalogResult,
+  EvidenceQualityFlagKind,
+  SetupCandidate,
+  Timeframe,
+} from "@/lib/types";
+
+// (Phase 9 #29) Deliberately a short allow-list, not "any flag at all" --
+// the dashboard stays decision-first, so only the two flags that most
+// directly mean "this specific research sample can't be trusted at face
+// value" get a pill here; the rest live in the Research Lab's full
+// Independence and robustness section.
+const DASHBOARD_PILL_FLAGS: EvidenceQualityFlagKind[] = ["high_overlap", "low_independent_sample"];
 
 type Status = "idle" | "running" | "completed" | "failed";
 
@@ -23,6 +36,9 @@ export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate })
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
+  const [diversity, setDiversity] = useState<AnalogDiversityReport | null>(null);
+  const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
+  const [sampleFlags, setSampleFlags] = useState<EvidenceQualityFlagKind[]>([]);
 
   async function handleClick() {
     if (status === "running") return;
@@ -41,6 +57,24 @@ export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate })
       );
       const res = await postAnalogQuery(candidate, [run.id], 10);
       setAnalogs(res.analogs);
+      setDiversity(res.diversity);
+      setDiverseAnalogs(res.diverse_analogs);
+
+      // (#29) Best-effort only -- this same quick corpus's independence
+      // flags for this exact setup type/direction, not a new research pass.
+      // A failure here (e.g. too few matching entries) never blocks analogs.
+      try {
+        const evidence = await postResearchQuery({
+          runIds: [run.id],
+          setupType: candidate.setup_type,
+          direction: candidate.direction,
+          horizonBars: 5,
+        });
+        setSampleFlags(evidence.evidence_card.flags.filter((f) => DASHBOARD_PILL_FLAGS.includes(f)));
+      } catch {
+        setSampleFlags([]);
+      }
+
       setStatus("completed");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Analog search failed");
@@ -67,9 +101,18 @@ export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate })
         deeper, larger-corpus search.
       </p>
       {status === "failed" && error && <p className="mt-1 text-[11px] text-negative">{error}</p>}
+      {analogs && sampleFlags.length > 0 && (
+        <p className="mt-1.5 inline-block rounded bg-amber-500/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
+          research sample highly overlapping
+        </p>
+      )}
       {analogs && (
         <div className="mt-2">
-          <HistoricalAnalogsPanel analogs={analogs} />
+          <HistoricalAnalogsPanel
+            analogs={analogs}
+            diversity={diversity ?? undefined}
+            diverseAnalogs={diverseAnalogs ?? undefined}
+          />
         </div>
       )}
     </div>
