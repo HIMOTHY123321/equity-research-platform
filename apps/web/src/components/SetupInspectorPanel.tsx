@@ -3,6 +3,7 @@
 import { useState } from "react";
 
 import { AnalogSearchButton } from "@/components/AnalogSearchButton";
+import { CatalystContextCard } from "@/components/CatalystContextCard";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
 import { formatDetectionTime, formatLifecycleState, formatPrice, formatSetupType } from "@/lib/format";
 import type { EvidenceCheck, SetupCandidate, SetupDetectionSnapshot } from "@/lib/types";
@@ -120,6 +121,7 @@ function SetupCard({ candidate }: { candidate: SetupCandidate }) {
       {expanded && (
         <>
           <EvidenceTree candidate={candidate} />
+          <CatalystContextCard candidate={candidate} />
           <AnalogSearchButton candidate={candidate} />
         </>
       )}
@@ -167,6 +169,7 @@ function NearMissCard({ candidate }: { candidate: SetupCandidate }) {
                 ✓ {check.label}
               </div>
             ))}
+          <CatalystContextCard candidate={candidate} />
           <AnalogSearchButton candidate={candidate} />
         </div>
       )}

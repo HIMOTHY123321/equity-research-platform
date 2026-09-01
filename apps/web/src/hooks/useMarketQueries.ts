@@ -1,13 +1,25 @@
 "use client";
 
-import { getCandles, getFeatures, getLevels, getSetups, getStructure } from "@/lib/api";
+import {
+  getCandles,
+  getFeatures,
+  getLevels,
+  getSetups,
+  getStructure,
+  getSymbolCatalysts,
+  getSymbolNews,
+  getWhatsMoving,
+} from "@/lib/api";
 import type {
   CandlesResponse,
+  CatalystEvent,
   FeatureSnapshot,
   MarketStructureSnapshot,
+  NormalizedNewsArticle,
   SetupDetectionSnapshot,
   SupportResistanceSnapshot,
   Timeframe,
+  WhatsMovingResponse,
 } from "@/lib/types";
 
 import { useAsyncResource, type AsyncResource } from "./useAsyncResource";
@@ -30,4 +42,16 @@ export function useLevels(symbol: string, timeframe: Timeframe): AsyncResource<S
 
 export function useSetups(symbol: string, timeframe: Timeframe): AsyncResource<SetupDetectionSnapshot> {
   return useAsyncResource(() => getSetups(symbol, timeframe), [symbol, timeframe]);
+}
+
+export function useSymbolNews(symbol: string, days = 30): AsyncResource<NormalizedNewsArticle[]> {
+  return useAsyncResource(() => getSymbolNews(symbol, days), [symbol, days]);
+}
+
+export function useSymbolCatalysts(symbol: string, days = 30): AsyncResource<CatalystEvent[]> {
+  return useAsyncResource(() => getSymbolCatalysts(symbol, days), [symbol, days]);
+}
+
+export function useWhatsMoving(symbols: string[], days = 3): AsyncResource<WhatsMovingResponse> {
+  return useAsyncResource(() => getWhatsMoving(symbols, days), [symbols.join(","), days]);
 }

@@ -32,7 +32,17 @@ function isoDaysAgo(days: number): string {
   return d.toISOString();
 }
 
-export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate }) {
+export function AnalogSearchButton({
+  candidate,
+  includeCatalystContext = false,
+  label,
+}: {
+  candidate: SetupCandidate;
+  /** Phase 10 (#I) -- opt in to the analog engine's optional catalyst-context
+   * dimensions. Everything else about this component is unchanged. */
+  includeCatalystContext?: boolean;
+  label?: string;
+}) {
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
@@ -55,7 +65,7 @@ export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate })
         isoDaysAgo(CORPUS_DAYS),
         isoDaysAgo(0),
       );
-      const res = await postAnalogQuery(candidate, [run.id], 10);
+      const res = await postAnalogQuery(candidate, [run.id], 10, includeCatalystContext);
       setAnalogs(res.analogs);
       setDiversity(res.diversity);
       setDiverseAnalogs(res.diverse_analogs);
@@ -93,8 +103,8 @@ export function AnalogSearchButton({ candidate }: { candidate: SetupCandidate })
         {status === "running"
           ? "SEARCHING…"
           : analogs
-            ? "HIDE HISTORICAL ANALOGS"
-            : "VIEW HISTORICAL ANALOGS"}
+            ? `HIDE ${label ?? "HISTORICAL ANALOGS"}`
+            : (label ?? "VIEW HISTORICAL ANALOGS")}
       </button>
       <p className="mt-1 text-[10px] text-muted">
         Searches the last {CORPUS_DAYS} days of {candidate.symbol} for a fast result -- use Research Lab for a

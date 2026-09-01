@@ -1060,6 +1060,7 @@ export interface AnalogQueryResponse {
   analogs: AnalogResult[];
   diversity: AnalogDiversityReport;
   diverse_analogs: AnalogResult[];
+  catalyst_context_applied: boolean;
 }
 
 export interface ResearchSnapshot {
@@ -1088,4 +1089,146 @@ export interface SnapshotComparison {
   same_config_hash: boolean;
   same_dataset: boolean;
   field_diffs: SnapshotFieldDiff[];
+}
+
+// ---- News / Catalyst Context engine (Phase 10) -----------------------------
+
+export type CatalystCategory =
+  | "earnings"
+  | "earnings_preannouncement"
+  | "guidance"
+  | "analyst_rating"
+  | "price_target"
+  | "product_launch"
+  | "product_issue"
+  | "regulatory"
+  | "legal_lawsuit"
+  | "merger_acquisition"
+  | "financing_capital_raise"
+  | "buyback"
+  | "dividend"
+  | "management_change"
+  | "filing"
+  | "macroeconomic"
+  | "federal_reserve"
+  | "interest_rates"
+  | "inflation"
+  | "employment"
+  | "geopolitical"
+  | "supply_chain"
+  | "sector_industry"
+  | "company_specific_other"
+  | "unknown";
+
+export type ClassificationMethodKind = "deterministic_rule" | "ai_assisted";
+
+export type ClassificationBasisKind =
+  | "provider_category_direct_map"
+  | "strong_keyword_match"
+  | "weak_keyword_fallback"
+  | "unknown_no_match";
+
+export interface CatalystClassification {
+  category: CatalystCategory;
+  basis: ClassificationBasisKind;
+  matched_rules: string[];
+  provider_raw_category: string | null;
+  method: ClassificationMethodKind;
+}
+
+export interface NormalizedNewsArticle {
+  article_id: string;
+  provider: string;
+  source: string | null;
+  headline: string;
+  published_at: string;
+  received_at: string | null;
+  url: string | null;
+  symbols: string[];
+  raw_category: string | null;
+  classification: CatalystClassification;
+  provenance: Record<string, unknown>;
+  ingested_at: string;
+}
+
+export interface CatalystEvent {
+  event_id: string;
+  primary_timestamp: string;
+  category: CatalystCategory;
+  affected_symbols: string[];
+  contributing_article_ids: string[];
+  source_count: number;
+  earliest_published_at: string;
+  latest_update_at: string;
+  title: string;
+  provenance: Record<string, unknown>;
+}
+
+export type ReactionSessionKind = "pre_market" | "regular" | "after_hours" | "weekend_non_trading";
+
+export interface MarketReaction {
+  event_id: string;
+  symbol: string;
+  timeframe: string;
+  session_at_event: ReactionSessionKind;
+  base_price: number | null;
+  price_horizons: HorizonOutcome[];
+  mfe: ExcursionMetrics | null;
+  mae: ExcursionMetrics | null;
+  rvol_at_event: number | null;
+  volume_spike_ratio: number | null;
+  atr_normalized_move: number | null;
+  nearest_support_price: number | null;
+  nearest_resistance_price: number | null;
+  structure_state_at_event: string | null;
+  bos_after_event: boolean;
+  choch_after_event: boolean;
+  gap_created: boolean | null;
+  evaluation_quality: EvaluationQuality | null;
+  computed_at: string;
+}
+
+export type SetupCatalystContextLabelKind =
+  | "catalyst_supported_context"
+  | "catalyst_conflicted_context"
+  | "catalyst_reaction_faded"
+  | "catalyst_reaction_persisted"
+  | "catalyst_timing_ambiguous"
+  | "no_recent_catalyst_found";
+
+export interface CatalystReference {
+  event_id: string;
+  category: CatalystCategory;
+  primary_timestamp: string;
+  source_count: number;
+  hours_before_setup: number | null;
+  hours_after_setup: number | null;
+}
+
+export interface SetupCatalystContext {
+  setup_id: string;
+  symbol: string;
+  catalysts_before: CatalystReference[];
+  catalysts_after: CatalystReference[];
+  nearest_catalyst: CatalystReference | null;
+  nearest_reaction: MarketReaction | null;
+  label: SetupCatalystContextLabelKind;
+  label_basis: string;
+}
+
+export interface WhatsMovingResponse {
+  events: CatalystEvent[];
+  symbols_covered: string[];
+  symbols_failed: Record<string, string>;
+}
+
+export interface CatalystEventDetail {
+  event: CatalystEvent;
+  articles: NormalizedNewsArticle[];
+}
+
+export interface CatalystResearchQueryResponse extends ResearchQueryResponse {
+  catalyst_filtered_sample_count: number;
+  unfiltered_sample_count: number;
+  catalyst_filters_applied: Record<string, unknown>;
 }

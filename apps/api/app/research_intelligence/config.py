@@ -128,6 +128,15 @@ class ResearchIntelligenceConfig:
                     "distance_to_resistance_percent": 1.0,
                     "ma20_relative_percent": 0.75,
                     "range_position": 0.75,
+                    # Phase 10 (#I) -- zero-weighted dimensions contribute
+                    # nothing even when populated; these are given real
+                    # weight only because a caller must explicitly opt into
+                    # populating them at all (extract_features's optional
+                    # catalyst_context param), so their presence in this
+                    # table never changes analog ranking unless catalyst
+                    # context was actually requested.
+                    "catalyst_category": 1.0,
+                    "catalyst_recency_bucket": 0.75,
                 },
             )
 

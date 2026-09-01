@@ -325,6 +325,15 @@ class AnalogFeatures(BaseModel):
     ma20_relative_percent: Optional[float] = None
     range_position: Optional[float] = None
 
+    # Phase 10 (#I) -- optional catalyst-context dimensions. `None` on both
+    # sides of a comparison (the default, when no catalyst context was
+    # requested) means `distance_between` reports them as "missing" and
+    # they contribute nothing to the distance -- byte-identical ranking to
+    # before this phase existed. Only populated when a caller explicitly
+    # opts in (`extract_features(..., catalyst_context=...)`).
+    catalyst_category: Optional[str] = None
+    catalyst_recency_bucket: Optional[str] = None
+
 
 class DimensionDistanceEntry(BaseModel):
     model_config = ConfigDict(frozen=True)

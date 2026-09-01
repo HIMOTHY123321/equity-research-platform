@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     # elsewhere in the codebase -- always branch on this setting.
     market_data_provider: str = "yfinance"
 
+    # News/catalyst provider selection (Phase 10): "yfinance" (default --
+    # no account/key needed, DEVELOPMENT/RESEARCH ONLY, see
+    # app/news/yfinance_provider.py and docs/decisions/0013) or "fixture"
+    # (deterministic, empty unless seeded -- tests only). A commercial
+    # deployment needs a properly licensed news provider implementing
+    # app.news.provider.NewsProvider; never hard-code a choice elsewhere.
+    news_provider: str = "yfinance"
+
     # Alpaca Market Data
     alpaca_api_key_id: str = ""
     alpaca_api_secret_key: str = ""

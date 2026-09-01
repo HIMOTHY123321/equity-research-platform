@@ -18,6 +18,9 @@ from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
 from app.market_data.provider import MarketDataProvider
 from app.market_data.yfinance_provider import YFinanceMarketDataProvider
+from app.news.fixture_provider import FixtureNewsProvider
+from app.news.provider import NewsProvider
+from app.news.yfinance_provider import YFinanceNewsProvider
 from app.watchlist.repository import InMemoryWatchlistRepository, WatchlistRepository
 
 
@@ -45,3 +48,13 @@ def get_market_data_provider() -> MarketDataProvider:
 @lru_cache
 def get_watchlist_repository() -> WatchlistRepository:
     return InMemoryWatchlistRepository()
+
+
+@lru_cache
+def get_news_provider() -> NewsProvider:
+    provider_name = get_settings().news_provider.lower()
+    if provider_name == "yfinance":
+        return YFinanceNewsProvider()
+    if provider_name == "fixture":
+        return FixtureNewsProvider([])
+    raise ValueError(f"Unknown NEWS_PROVIDER {provider_name!r}; expected 'yfinance' or 'fixture'")

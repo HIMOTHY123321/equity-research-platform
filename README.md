@@ -105,28 +105,37 @@ npm run build
 
 ## Status
 
-Phases 1-5 are complete: project foundation, the market data engine
-(`MarketDataProvider`/Alpaca, session-aware 4H aggregation, watchlist,
-`/api/market/*` + `/api/watchlist/*`), the deterministic feature engine
-(previous day/week levels, gap, Wilder ATR, EMA/SMA with distance-from-price,
-rolling highs/lows, relative volume, latest-candle classification,
-session-so-far range), the deterministic market structure engine
-(swing high/low detection with an explicit `pivot_timestamp`/`confirmed_at`
-split, HH/HL/LH/LL classification, trend classification, Break of Structure,
-Change of Character, active range, freshness metrics, and multi-timeframe
-summaries), and the deterministic, evidence-backed support/resistance
-engine (multi-timeframe raw levels, percentage-tolerance clustering into
-zones with full provenance, independent touch/rejection/break detection,
-an explainable 0-100 strength score with diminishing returns, zone
-lifecycle, and nearest-level helpers) — all under the same `as_of`/
-no-lookahead discipline, safe for later reuse by the backtester.
-`GET /api/market/{symbol}/features`, `/structure`, and `/levels` expose
-these, and the dashboard shows a feature panel, a market structure panel,
-and a support/resistance panel (with a "why this level?" evidence
-breakdown) under the chart, which now also overlays swing/BOS/CHOCH
-markers and support/resistance zone lines. No setup detection, scoring, or
-AI calls are implemented yet — see `docs/decisions/` and commit history for
-what's landed phase by phase.
+Phases 1-10 are complete. Phases 1-5 built the market data engine, the
+deterministic feature/market-structure/support-resistance engines (`GET
+/api/market/{symbol}/{features,structure,levels}`), all under the same
+`as_of`/no-lookahead discipline the rest of the pipeline reuses. Phase 6
+added deterministic setup detection (13 detector modules covering all 16
+`SetupType` values, `GET /api/market/{symbol}/setups`). Phase 7 added the
+setup ledger and historical replay/outcome-evaluation engine
+(`app/research/`). Phase 8 (ADR 0010) added the research-intelligence
+statistics layer on top of it — baselines, bootstrap confidence intervals,
+signal decay, excursion analysis, temporal/cross-symbol stability, a
+deterministic historical analog engine, evidence cards, and research
+snapshots (`/api/research/*`). Phase 9 (ADR 0012) added an independence/
+robustness validation layer (episode grouping, purged sampling, block
+bootstrap, walk-forward validation, conclusion stability) and, having
+re-evaluated Phase 8's findings against it, reached an explicit **RANKING
+GATE: FAIL** — evidence does not yet justify a calibrated, scored ranking
+engine, and no such engine has been built.
+
+Phase 10 (ADR 0013) added a News & Catalyst Context Engine: a
+provider-independent news ingestion layer (fixture provider for tests, a
+yfinance dev/research-only provider with real-data-verified normalization),
+a deterministic 25-category catalyst taxonomy and event grouping/
+deduplication, a market-reaction engine reusing Phase 7's own horizon/
+excursion machinery, deterministic catalyst-to-setup linking (a six-label
+descriptive vocabulary, never a buy/sell signal), additive extensions to
+the Phase 8/9 cohort and historical-analog engines, and dashboard surfaces
+("What's Moving the Market," a per-symbol catalyst timeline, and a Catalyst
+Context section on every setup card) — see `/api/news/*` and
+`/api/catalysts/*`. `scoring/`, `risk_reward/`, `ai_analysis/`,
+`backtesting/`, and `reporting/` remain unimplemented placeholder packages;
+see `docs/decisions/` and commit history for what's landed phase by phase.
 
 ## Development rules this project follows
 

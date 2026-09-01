@@ -17,7 +17,9 @@ from __future__ import annotations
 
 from typing import Optional
 
+from app.news.schemas import SetupCatalystContext
 from app.research.schemas import SetupLedgerEntry
+from app.research_intelligence.cohorts import time_since_catalyst_bucket
 from app.research_intelligence.config import DEFAULT_RESEARCH_INTELLIGENCE_CONFIG, ResearchIntelligenceConfig
 from app.research_intelligence.episodes import SetupEpisode
 from app.research_intelligence.schemas import (
@@ -39,6 +41,10 @@ _CATEGORICAL_DIMENSIONS = (
     "one_hour_structure",
     "rvol_bucket",
     "gap_state",
+    # Phase 10 (#I) -- None on both sides unless a caller opts in; see
+    # AnalogFeatures' docstring on these two fields.
+    "catalyst_category",
+    "catalyst_recency_bucket",
 )
 _NUMERIC_DIMENSIONS = (
     "resistance_confluence",
@@ -66,7 +72,18 @@ def detection_close_for(
     return detection_candle.close if detection_candle else None
 
 
-def extract_features(candidate: SetupCandidate, detection_close: Optional[float]) -> AnalogFeatures:
+def extract_features(
+    candidate: SetupCandidate,
+    detection_close: Optional[float],
+    catalyst_context: Optional[SetupCatalystContext] = None,
+) -> AnalogFeatures:
+    """`catalyst_context` (#I) is optional and defaults to `None`, which
+    leaves `catalyst_category`/`catalyst_recency_bucket` both `None` --
+    identical output to before this phase existed. Only ever built from
+    information already known as of `candidate.candidate_candle_timestamp`
+    (app.news.setup_linking's own as_of discipline), so populating it never
+    lets future outcome data influence analog ranking (#I "future outcome
+    data must NEVER influence analog ranking")."""
     fp = candidate.fingerprint
     context = candidate.context
 
@@ -109,6 +126,16 @@ def extract_features(candidate: SetupCandidate, detection_close: Optional[float]
         distance_to_resistance_percent=distance_to_resistance_percent,
         ma20_relative_percent=ma20_relative_percent,
         range_position=range_position,
+        catalyst_category=(
+            catalyst_context.nearest_catalyst.category.value
+            if catalyst_context and catalyst_context.nearest_catalyst
+            else None
+        ),
+        catalyst_recency_bucket=(
+            time_since_catalyst_bucket(catalyst_context.nearest_catalyst.hours_before_setup)
+            if catalyst_context and catalyst_context.nearest_catalyst
+            else None
+        ),
     )
 
 

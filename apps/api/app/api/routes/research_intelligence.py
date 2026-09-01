@@ -16,11 +16,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from app.api.deps import get_market_data_provider
+from app.api.deps import get_market_data_provider, get_news_provider
 from app.config import get_settings
 from app.database.session import get_db
 from app.market_data.candle_cache import SqlAlchemyCandleCacheRepository, fetch_candles_cached
 from app.market_data.provider import MarketDataProvider
+from app.news.provider import NewsProvider
+from app.news.repository import SqlAlchemyNewsRepository
+from app.news.schemas import SetupCatalystContext
+from app.news.setup_linking import build_setup_catalyst_contexts_batch
 from app.research.config import DEFAULT_RESEARCH_CONFIG
 from app.research.engine import execute_research_run
 from app.research.repository import SqlAlchemyResearchRepository
@@ -87,6 +91,10 @@ def _snapshot_repository(db: Session = Depends(get_db)) -> SqlAlchemySnapshotRep
 
 def _candle_cache_repository(db: Session = Depends(get_db)) -> SqlAlchemyCandleCacheRepository:
     return SqlAlchemyCandleCacheRepository(db)
+
+
+def _news_repository(db: Session = Depends(get_db)) -> SqlAlchemyNewsRepository:
+    return SqlAlchemyNewsRepository(db)
 
 
 # ---- Universe replay -------------------------------------------------------
@@ -248,7 +256,22 @@ def research_query(
     entries = _apply_filters(raw_pool, body)
     if not entries:
         raise HTTPException(status_code=404, detail="No ledger entries matched the requested run(s)/filters")
+    return compute_research_query_response(entries, raw_pool, body, provider)
 
+
+def compute_research_query_response(
+    entries: list[SetupLedgerEntry],
+    raw_pool: list[SetupLedgerEntry],
+    body: ResearchQueryRequest,
+    provider: MarketDataProvider,
+) -> ResearchQueryResponse:
+    """The statistics-computation core of `/query`, extracted so
+    app.api.routes.research_catalysts can run the exact same Phase 8/9
+    pipeline over a catalyst-filtered entry pool without duplicating a
+    single line of it (#H "reuse Phase 8/9 methodology"). `entries` is
+    whatever pool the caller has already selected/filtered; `raw_pool` is
+    only used for the qualified-vs-rejected conclusion-stability comparison
+    below, same as the original inline implementation."""
     timeframe = Timeframe(entries[0].timeframe)
     config = DEFAULT_RESEARCH_INTELLIGENCE_CONFIG
 
@@ -342,12 +365,17 @@ class AnalogQueryRequest(BaseModel):
     query_candidate: SetupCandidate
     corpus_run_ids: list[str]
     top_n: Optional[int] = None
+    # Phase 10 (#I) -- opt-in only; False reproduces pre-Phase-10 behavior
+    # exactly (extract_features's catalyst_context defaults to None either
+    # way, so ranking is byte-identical when this stays False).
+    include_catalyst_context: bool = False
 
 
 class AnalogQueryResponse(BaseModel):
     analogs: list[AnalogResult]
     diversity: AnalogDiversityReport
     diverse_analogs: list[AnalogResult]
+    catalyst_context_applied: bool = False
 
 
 @router.post("/analogs", response_model=AnalogQueryResponse)
@@ -355,6 +383,8 @@ def query_analogs(
     body: AnalogQueryRequest,
     provider: MarketDataProvider = Depends(get_market_data_provider),
     repository: SqlAlchemyResearchRepository = Depends(_repository),
+    news_provider: NewsProvider = Depends(get_news_provider),
+    news_repository: SqlAlchemyNewsRepository = Depends(_news_repository),
 ) -> AnalogQueryResponse:
     """Works identically whether `query_candidate` came from a live
     `/setups` response or a historical ledger entry's `detection` -- both
@@ -374,15 +404,26 @@ def query_analogs(
         timeframe = Timeframe(body.query_candidate.timeframe.value)
         candles_by_symbol[symbol] = provider.get_candles(symbol, timeframe, limit=_FETCH_LIMIT)
 
+    catalyst_context_by_id: dict[str, SetupCatalystContext] = {}
+    if body.include_catalyst_context:
+        all_candidates = [body.query_candidate] + [e.detection for e in corpus_entries]
+        catalyst_context_by_id = build_setup_catalyst_contexts_batch(
+            all_candidates, news_provider, provider, news_repository
+        )
+
     query_close = detection_close_for(body.query_candidate, candles_by_symbol)
-    query_features = extract_features(body.query_candidate, query_close)
+    query_features = extract_features(
+        body.query_candidate, query_close, catalyst_context_by_id.get(body.query_candidate.id)
+    )
 
     candidates = []
     for entry in corpus_entries:
         if entry.setup_id == body.query_candidate.id:
             continue  # never rank a case against itself
         close = detection_close_for(entry.detection, candles_by_symbol)
-        candidates.append((entry, extract_features(entry.detection, close)))
+        candidates.append(
+            (entry, extract_features(entry.detection, close, catalyst_context_by_id.get(entry.setup_id)))
+        )
 
     ranked = rank_analogs(query_features, candidates, top_n=body.top_n)
     entries_by_id = {e.setup_id: e for e in corpus_entries}
@@ -397,7 +438,12 @@ def query_analogs(
     )
     diverse = diverse_analogs(decorated, episode_lookup, limit=body.top_n)
 
-    return AnalogQueryResponse(analogs=decorated, diversity=diversity, diverse_analogs=diverse)
+    return AnalogQueryResponse(
+        analogs=decorated,
+        diversity=diversity,
+        diverse_analogs=diverse,
+        catalyst_context_applied=body.include_catalyst_context,
+    )
 
 
 # ---- Research snapshots -----------------------------------------------------

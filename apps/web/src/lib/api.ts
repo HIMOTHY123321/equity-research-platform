@@ -1,20 +1,27 @@
 import type {
   AnalogQueryResponse,
   CandlesResponse,
+  CatalystEvent,
+  CatalystEventDetail,
+  CatalystResearchQueryResponse,
   FeatureSnapshot,
   LedgerEntriesResponse,
+  MarketReaction,
   MarketStructureSnapshot,
+  NormalizedNewsArticle,
   ResearchQueryResponse,
   ResearchRun,
   ResearchRunSummary,
   ResearchSnapshot,
   SetupCandidate,
+  SetupCatalystContext,
   SetupDetectionSnapshot,
   SnapshotComparison,
   SupportResistanceSnapshot,
   Timeframe,
   UniverseReplayResponse,
   WatchlistSymbol,
+  WhatsMovingResponse,
 } from "@/lib/types";
 
 export function getApiBaseUrl(): string {
@@ -185,6 +192,7 @@ export function postAnalogQuery(
   queryCandidate: SetupCandidate,
   corpusRunIds: string[],
   topN?: number,
+  includeCatalystContext?: boolean,
 ): Promise<AnalogQueryResponse> {
   return request<AnalogQueryResponse>(`/api/research/analogs`, {
     method: "POST",
@@ -193,6 +201,7 @@ export function postAnalogQuery(
       query_candidate: queryCandidate,
       corpus_run_ids: corpusRunIds,
       top_n: topN ?? null,
+      include_catalyst_context: includeCatalystContext ?? false,
     }),
   });
 }
@@ -229,4 +238,76 @@ export function compareResearchSnapshots(
 ): Promise<SnapshotComparison> {
   const params = new URLSearchParams({ snapshot_a: snapshotA, snapshot_b: snapshotB });
   return request<SnapshotComparison>(`/api/research/snapshots/compare?${params}`);
+}
+
+// ---- News / Catalyst Context engine (Phase 10) ------------------------------
+
+export function getSymbolNews(symbol: string, days = 30): Promise<NormalizedNewsArticle[]> {
+  const params = new URLSearchParams({ days: String(days) });
+  return request<NormalizedNewsArticle[]>(`/api/news/${symbol}?${params}`);
+}
+
+export function getWhatsMoving(symbols: string[], days = 3): Promise<WhatsMovingResponse> {
+  const params = new URLSearchParams({ symbols: symbols.join(","), days: String(days) });
+  return request<WhatsMovingResponse>(`/api/news/market/whats-moving?${params}`);
+}
+
+export function getSymbolCatalysts(symbol: string, days = 30): Promise<CatalystEvent[]> {
+  const params = new URLSearchParams({ days: String(days) });
+  return request<CatalystEvent[]>(`/api/catalysts/${symbol}?${params}`);
+}
+
+export function getCatalystEvent(eventId: string): Promise<CatalystEventDetail> {
+  return request<CatalystEventDetail>(`/api/catalysts/event/${eventId}`);
+}
+
+export function getCatalystReaction(
+  eventId: string,
+  symbol: string,
+  timeframe: Timeframe,
+): Promise<MarketReaction> {
+  const params = new URLSearchParams({ symbol, timeframe });
+  return request<MarketReaction>(`/api/catalysts/event/${eventId}/reaction?${params}`);
+}
+
+export function getSetupCatalystContext(
+  candidate: SetupCandidate,
+  lookbackDays = 5,
+): Promise<SetupCatalystContext> {
+  return request<SetupCatalystContext>(`/api/catalysts/setup-context`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ candidate, lookback_days: lookbackDays }),
+  });
+}
+
+export interface CatalystResearchQueryParams extends ResearchQueryParams {
+  requireCatalyst?: boolean;
+  catalystCategory?: string;
+  catalystMaxHoursSince?: number;
+  catalystRvolElevated?: boolean;
+}
+
+export function postCatalystResearchQuery(
+  params: CatalystResearchQueryParams,
+): Promise<CatalystResearchQueryResponse> {
+  return request<CatalystResearchQueryResponse>(`/api/research/catalysts/query`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      run_ids: params.runIds,
+      setup_type: params.setupType ?? null,
+      direction: params.direction ?? null,
+      qualification_state: params.qualificationState ?? null,
+      horizon_bars: params.horizonBars ?? 5,
+      seed: params.seed ?? 0,
+      partition_ratios: params.partitionRatios ?? true,
+      favorable_atr: params.favorableAtr ?? null,
+      adverse_atr: params.adverseAtr ?? null,
+      require_catalyst: params.requireCatalyst ?? false,
+      catalyst_category: params.catalystCategory ?? null,
+      catalyst_max_hours_since: params.catalystMaxHoursSince ?? null,
+      catalyst_rvol_elevated: params.catalystRvolElevated ?? null,
+    }),
+  });
 }

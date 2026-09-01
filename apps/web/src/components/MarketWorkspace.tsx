@@ -7,9 +7,18 @@ import { FeaturePanel } from "@/components/FeaturePanel";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
 import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
+import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
 import { TimeframeSelector } from "@/components/TimeframeSelector";
 import { Watchlist } from "@/components/Watchlist";
-import { useCandles, useFeatures, useLevels, useSetups, useStructure } from "@/hooks/useMarketQueries";
+import { WhatsMovingPanel } from "@/components/WhatsMovingPanel";
+import {
+  useCandles,
+  useFeatures,
+  useLevels,
+  useSetups,
+  useStructure,
+  useSymbolCatalysts,
+} from "@/hooks/useMarketQueries";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -33,6 +42,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
   const structureQuery = useStructure(symbol, timeframe);
   const levelsQuery = useLevels(symbol, timeframe);
   const setupsQuery = useSetups(symbol, timeframe);
+  const catalystsQuery = useSymbolCatalysts(symbol);
 
   const candles = candlesQuery.data?.candles ?? [];
   const chartState =
@@ -129,6 +139,23 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
           data -- the most "debug terminal" of these panels -- comes last. */}
       <section className="rounded-md border border-border bg-surface p-3">
         <SetupInspectorPanel query={setupsQuery} />
+      </section>
+
+      <section className="rounded-md border border-border bg-surface p-3">
+        <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">WHAT&apos;S MOVING THE MARKET</h2>
+        <WhatsMovingPanel />
+      </section>
+
+      <section className="rounded-md border border-border bg-surface p-3">
+        <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">
+          CATALYST TIMELINE — {symbol}
+        </h2>
+        <SymbolCatalystTimeline
+          query={catalystsQuery}
+          symbol={symbol}
+          timeframe={timeframe}
+          setups={setupsQuery.data ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates] : []}
+        />
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">

@@ -23,6 +23,10 @@ EXPECTED_TABLES = {
     "research_snapshots",
     "cached_candle_series",
     "frozen_datasets",
+    "news_articles",
+    "catalyst_events",
+    "catalyst_event_articles",
+    "catalyst_reactions",
 }
 
 

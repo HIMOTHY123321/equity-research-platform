@@ -169,3 +169,71 @@ export function formatAtr(value: number | null): string {
   const sign = value > 0 ? "+" : "";
   return `${sign}${value.toFixed(2)} ATR`;
 }
+
+// ---- News / Catalyst Context engine (Phase 10) -----------------------------
+
+const CATALYST_CATEGORY_LABELS: Record<string, string> = {
+  earnings: "Earnings",
+  earnings_preannouncement: "Earnings Preannouncement",
+  guidance: "Guidance",
+  analyst_rating: "Analyst Rating",
+  price_target: "Price Target",
+  product_launch: "Product Launch",
+  product_issue: "Product Issue",
+  regulatory: "Regulatory",
+  legal_lawsuit: "Legal / Lawsuit",
+  merger_acquisition: "M&A",
+  financing_capital_raise: "Capital Raise",
+  buyback: "Buyback",
+  dividend: "Dividend",
+  management_change: "Management Change",
+  filing: "Filing",
+  macroeconomic: "Macro",
+  federal_reserve: "Federal Reserve",
+  interest_rates: "Interest Rates",
+  inflation: "Inflation",
+  employment: "Employment",
+  geopolitical: "Geopolitical",
+  supply_chain: "Supply Chain",
+  sector_industry: "Sector / Industry",
+  company_specific_other: "Company News",
+  unknown: "Uncategorized",
+};
+
+export function formatCatalystCategory(category: string): string {
+  return CATALYST_CATEGORY_LABELS[category] ?? category;
+}
+
+const CATALYST_CONTEXT_LABELS: Record<string, string> = {
+  catalyst_supported_context: "Catalyst-Supported",
+  catalyst_conflicted_context: "Catalyst-Conflicted",
+  catalyst_reaction_faded: "Catalyst Reaction Faded",
+  catalyst_reaction_persisted: "Catalyst Reaction Persisted",
+  catalyst_timing_ambiguous: "Catalyst Timing Ambiguous",
+  no_recent_catalyst_found: "No Recent Catalyst",
+};
+
+export function formatCatalystContextLabel(label: string): string {
+  return CATALYST_CONTEXT_LABELS[label] ?? label;
+}
+
+/** Neutral by design -- never green/red, since a catalyst label is
+ * descriptive context, not a bullish/bearish signal. */
+export function catalystContextLabelColorClass(label: string): string {
+  if (label === "catalyst_supported_context" || label === "catalyst_reaction_persisted") {
+    return "text-accent";
+  }
+  if (label === "catalyst_conflicted_context") return "text-warning";
+  return "text-muted";
+}
+
+export function formatHoursAgo(hours: number | null): string {
+  if (hours === null) return "—";
+  if (hours < 1) return `${Math.round(hours * 60)}m`;
+  if (hours < 24) return `${hours.toFixed(hours < 10 ? 1 : 0)}h`;
+  return `${(hours / 24).toFixed(1)}d`;
+}
+
+export function formatSourceCount(count: number): string {
+  return `${count} source${count === 1 ? "" : "s"}`;
+}

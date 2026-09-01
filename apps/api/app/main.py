@@ -7,7 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.routes import market, research, research_intelligence, watchlist
+from app.api.routes import market, news, research, research_catalysts, research_intelligence, watchlist
 from app.config import get_settings
 from app.market_data.exceptions import (
     AuthenticationError,
@@ -33,6 +33,9 @@ app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(research.router)
 app.include_router(research_intelligence.router)
+app.include_router(news.news_router)
+app.include_router(news.catalyst_router)
+app.include_router(research_catalysts.router)
 
 
 @app.exception_handler(AuthenticationError)

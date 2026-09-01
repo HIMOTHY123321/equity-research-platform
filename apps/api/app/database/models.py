@@ -524,3 +524,94 @@ class FrozenDatasetRecord(Base):
     candles: Mapped[list] = mapped_column(JSON)
     data_hash: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 10: News/Catalyst Context engine. Same portable-UUID-pk convention as
+# every table since Phase 7. `article_id`/`event_id` are the stable,
+# content-derived business keys (app.news.normalization/events) that make
+# ingestion idempotent -- unique constraints on those, not on the internal
+# uuid pk, are what a repository's upsert logic actually keys on. See
+# app/news/repository.py and docs/decisions/0013.
+# ---------------------------------------------------------------------------
+
+
+class NewsArticleRecord(Base):
+    """One normalized, deduplicated source article (#B). Never mutated after
+    insert except for fields a provider might legitimately update on
+    re-fetch (received_at); classification is fixed at ingestion time."""
+
+    __tablename__ = "news_articles"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    article_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    provider: Mapped[str] = mapped_column(String(32), index=True)
+    source: Mapped[Optional[str]] = mapped_column(String(200))
+    headline: Mapped[str] = mapped_column(String(500))
+    published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    received_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    url: Mapped[Optional[str]] = mapped_column(String(1000))
+    symbols: Mapped[list] = mapped_column(JSON, default=list)
+    raw_category: Mapped[Optional[str]] = mapped_column(String(100))
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    classification: Mapped[dict] = mapped_column(JSON)
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    ingested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CatalystEventRecord(Base):
+    """A deterministic grouping of one or more `NewsArticleRecord`s (#D).
+    `event_id` is a pure function of its member article ids (app.news.events)
+    -- re-grouping the same articles always produces the same row, which is
+    what makes repository upserts idempotent."""
+
+    __tablename__ = "catalyst_events"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    event_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    primary_timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    category: Mapped[str] = mapped_column(String(64), index=True)
+    affected_symbols: Mapped[list] = mapped_column(JSON, default=list)
+    contributing_article_ids: Mapped[list] = mapped_column(JSON, default=list)
+    source_count: Mapped[int] = mapped_column(Integer)
+    earliest_published_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    latest_update_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    title: Mapped[str] = mapped_column(String(500))
+    provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CatalystEventArticleRecord(Base):
+    """Event <-> article membership (#D, #L) as its own relational mapping,
+    alongside (never instead of) `CatalystEventRecord.contributing_article_ids`
+    -- every source article behind an event is preserved and independently
+    queryable ("which events is this one article part of") without deserializing
+    every event's JSON list."""
+
+    __tablename__ = "catalyst_event_articles"
+    __table_args__ = (UniqueConstraint("event_id", "article_id", name="uq_event_article"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    article_id: Mapped[str] = mapped_column(String(64), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class CatalystReactionRecord(Base):
+    """A cached market-reaction measurement (#F) for one (event, symbol,
+    timeframe) -- reaction is symbol-specific even for a market-wide event,
+    so it is never collapsed to one row per event. Recomputing is cheap and
+    deterministic (app.news.reaction); this table exists so repeated reads
+    (dashboard, timeline, research) don't repeat the computation."""
+
+    __tablename__ = "catalyst_reactions"
+    __table_args__ = (
+        UniqueConstraint("event_id", "symbol", "timeframe", name="uq_reaction_event_symbol_timeframe"),
+    )
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    event_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8))
+    reaction: Mapped[dict] = mapped_column(JSON)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
