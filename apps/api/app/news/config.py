@@ -20,6 +20,21 @@ class CatalystConfig:
     # are close in time").
     event_grouping_window_hours: float = 12.0
 
+    # Event grouping hardening (Phase 10.1 #D): category+symbol+window alone
+    # is a real signal for every KNOWN category (two "earnings" articles
+    # about the same symbol close in time really are almost certainly the
+    # same release) -- but "unknown" is not a real category, it is "we
+    # couldn't classify this," so two UNKNOWN articles sharing only a symbol
+    # and a rough time window have no stronger signal in common. For that
+    # one case (both sides classified UNKNOWN) an additional deterministic
+    # check applies: the normalized-headline-token Jaccard similarity
+    # (`headline_similarity`) between the article and the candidate group's
+    # anchor must be at least this threshold to merge. Deliberately
+    # conservative (#D "false negatives are preferable to incorrectly
+    # combining unrelated corporate events") -- KNOWN-category grouping is
+    # completely unaffected by this threshold.
+    unknown_category_min_headline_similarity: float = 0.2
+
     # Reaction measurement (#F), in completed primary-timeframe bars --
     # deliberately the same bar-based convention app.research.config /
     # app.research_intelligence.config already use, not literal clock

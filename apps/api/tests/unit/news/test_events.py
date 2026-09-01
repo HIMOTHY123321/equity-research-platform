@@ -1,4 +1,5 @@
-from app.news.events import group_into_events
+from app.news.config import DEFAULT_CATALYST_CONFIG
+from app.news.events import group_into_events, headline_similarity
 from app.news.fixture_provider import FixtureNewsProvider
 from app.news.schemas import CatalystCategory
 from tests.unit.news.conftest import et, raw_article
@@ -95,3 +96,100 @@ def test_every_source_article_preserved_never_discarded():
     events = group_into_events(_articles(raw))
     assert len(events) == 1
     assert events[0].source_count == 2
+
+
+# ---- Phase 10.1 (#D) event-grouping hardening: UNKNOWN-category gate -------
+
+
+def test_headline_similarity_identical_headlines_is_one():
+    h = "Acme Corp shakes up leadership team amid strategy shift"
+    assert headline_similarity(h, h) == 1.0
+
+
+def test_headline_similarity_no_overlap_is_zero():
+    assert headline_similarity("Acme unveils charity gala", "Zorp announces weather report") == 0.0
+
+
+def test_headline_similarity_empty_headline_is_zero():
+    assert headline_similarity("", "Acme Corp news") == 0.0
+
+
+def test_related_unknown_stories_from_different_publications_merge():
+    """Both classify UNKNOWN (no keyword rule matches either headline), but
+    they clearly describe the same underlying story and share enough
+    headline tokens to clear the similarity gate -- must still merge."""
+    raw = [
+        raw_article(
+            "Acme Corp shakes up leadership team amid strategy shift",
+            et(2026, 8, 20, 9, 0),
+            ["ACME"],
+            source="Reuters",
+        ),
+        raw_article(
+            "Acme Corp leadership shakeup signals new strategy",
+            et(2026, 8, 20, 9, 30),
+            ["ACME"],
+            source="Bloomberg",
+        ),
+    ]
+    articles = _articles(raw)
+    assert {a.classification.category for a in articles} == {CatalystCategory.UNKNOWN}
+    events = group_into_events(articles)
+    assert len(events) == 1
+    assert events[0].source_count == 2
+
+
+def test_unrelated_unknown_stories_same_ticker_do_not_merge_from_proximity_alone():
+    """Both UNKNOWN, same symbol, well within the grouping window -- but
+    headlines share almost nothing in common. Must stay separate (#D
+    "false negatives are preferable to incorrectly combining unrelated
+    corporate events")."""
+    raw = [
+        raw_article(
+            "Acme Corp shakes up leadership team amid strategy shift",
+            et(2026, 8, 20, 9, 0),
+            ["ACME"],
+        ),
+        raw_article(
+            "Acme Corp featured in local charity gala coverage",
+            et(2026, 8, 20, 9, 30),
+            ["ACME"],
+        ),
+    ]
+    articles = _articles(raw)
+    assert {a.classification.category for a in articles} == {CatalystCategory.UNKNOWN}
+    similarity = headline_similarity(articles[0].headline, articles[1].headline)
+    assert similarity < DEFAULT_CATALYST_CONFIG.unknown_category_min_headline_similarity
+
+    events = group_into_events(articles)
+    assert len(events) == 2
+
+
+def test_known_category_grouping_unaffected_by_similarity_gate():
+    """Two EARNINGS headlines sharing almost no tokens beyond the company
+    name must still merge -- the similarity gate only ever applies to
+    UNKNOWN-UNKNOWN pairs, never to a real matched category."""
+    raw = [
+        raw_article("Acme reports quarterly earnings beat", et(2026, 8, 20, 9, 0), ["ACME"]),
+        raw_article("Acme Q2 earnings per share top estimates", et(2026, 8, 20, 9, 30), ["ACME"]),
+    ]
+    articles = _articles(raw)
+    similarity = headline_similarity(articles[0].headline, articles[1].headline)
+    events = group_into_events(articles)
+    assert len(events) == 1  # merges regardless of how low `similarity` is
+    assert similarity >= 0.0  # sanity: similarity was actually computed, not skipped
+
+
+def test_unknown_gate_event_ids_remain_stable_and_order_independent():
+    raw = [
+        raw_article(
+            "Acme Corp shakes up leadership team amid strategy shift", et(2026, 8, 20, 9, 0), ["ACME"]
+        ),
+        raw_article(
+            "Acme Corp leadership shakeup signals new strategy", et(2026, 8, 20, 9, 30), ["ACME"]
+        ),
+    ]
+    articles = _articles(raw)
+    events_forward = group_into_events(articles)
+    events_reversed = group_into_events(list(reversed(articles)))
+    assert events_forward[0].event_id == events_reversed[0].event_id

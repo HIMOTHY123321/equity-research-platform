@@ -237,3 +237,73 @@ export function formatHoursAgo(hours: number | null): string {
 export function formatSourceCount(count: number): string {
   return `${count} source${count === 1 ? "" : "s"}`;
 }
+
+// ---- Catalyst Research Lab evidence-state messaging (Phase 10.1 #C) -------
+//
+// A pure presentation layer over already-typed Phase 8/9 fields -- never a
+// new statistic, never BUY/SELL/confidence-score language. Each badge is a
+// deterministic function of fields the backend already computed.
+
+export interface EvidenceStateInput {
+  evidence_maturity: string;
+  flags: string[];
+  walk_forward_stability: string;
+  temporal_stability: string;
+  concentration_warning_count: number;
+  overlap_warning: string | null;
+  contradiction_statuses: string[];
+  conclusion_stability_label: string | null;
+}
+
+export function deriveEvidenceStateBadges(input: EvidenceStateInput): string[] {
+  const badges: string[] = [];
+
+  if (
+    input.evidence_maturity === "insufficient" ||
+    input.flags.includes("insufficient_sample") ||
+    input.flags.includes("low_independent_sample")
+  ) {
+    badges.push("INSUFFICIENT SAMPLE");
+  }
+  if (input.flags.includes("high_overlap") || input.flags.includes("overlapping_observations")) {
+    badges.push("HIGH OVERLAP");
+  }
+  if (
+    input.concentration_warning_count > 0 ||
+    input.flags.includes("symbol_concentration") ||
+    input.flags.includes("episode_concentration") ||
+    input.flags.includes("temporal_concentration") ||
+    input.flags.includes("single_symbol_dependence")
+  ) {
+    badges.push("CONCENTRATED");
+  }
+  if (
+    input.walk_forward_stability === "unstable" ||
+    input.temporal_stability === "unstable" ||
+    input.flags.includes("result_unstable") ||
+    input.flags.includes("walk_forward_instability") ||
+    input.flags.includes("temporal_instability")
+  ) {
+    badges.push("UNSTABLE");
+  }
+  if (
+    input.contradiction_statuses.includes("assumption_not_supported_in_this_sample") ||
+    input.conclusion_stability_label === "reverses"
+  ) {
+    badges.push("CONTRADICTORY");
+  }
+  if (input.conclusion_stability_label === "survives") {
+    badges.push("OUT-OF-SAMPLE SUPPORT");
+  }
+  if (input.evidence_maturity !== "replicated") {
+    badges.push("NO REPLICATED EDGE");
+  }
+
+  return badges;
+}
+
+export function evidenceStateBadgeColorClass(badge: string): string {
+  if (badge === "OUT-OF-SAMPLE SUPPORT") return "bg-positive/15 text-positive";
+  if (badge === "NO REPLICATED EDGE") return "bg-border text-muted";
+  return "bg-amber-500/15 text-amber-600 dark:text-amber-400";
+}

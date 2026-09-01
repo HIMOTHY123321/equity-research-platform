@@ -286,6 +286,7 @@ export interface CatalystResearchQueryParams extends ResearchQueryParams {
   catalystCategory?: string;
   catalystMaxHoursSince?: number;
   catalystRvolElevated?: boolean;
+  compareToNoCatalyst?: boolean;
 }
 
 export function postCatalystResearchQuery(
@@ -308,6 +309,7 @@ export function postCatalystResearchQuery(
       catalyst_category: params.catalystCategory ?? null,
       catalyst_max_hours_since: params.catalystMaxHoursSince ?? null,
       catalyst_rvol_elevated: params.catalystRvolElevated ?? null,
+      compare_to_no_catalyst: params.compareToNoCatalyst ?? false,
     }),
   });
 }

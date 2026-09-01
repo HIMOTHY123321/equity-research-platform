@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { CatalystResearchPanel } from "@/components/research/CatalystResearchPanel";
 import { HistoricalAnalogsPanel } from "@/components/research/HistoricalAnalogsPanel";
 import { ResearchResultsPanel } from "@/components/research/ResearchResultsPanel";
 import { ResearchSnapshotsPanel } from "@/components/research/ResearchSnapshotsPanel";
@@ -385,6 +386,9 @@ export default function ResearchLabPage() {
 
           {queryStatus === "completed" && queryResult && <ResearchResultsPanel result={queryResult} />}
         </section>
+
+        {/* ---- CATALYST RESEARCH ---- */}
+        <CatalystResearchPanel runIds={Object.values(poolRunIds)} />
 
         {/* ---- HISTORICAL ANALOGS ---- */}
         {runEntries.length > 0 && (

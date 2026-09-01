@@ -23,14 +23,55 @@ least one affected symbol, shares the same normalized category, and whose
 `published_at`. If several open groups match, the group whose anchor is
 closest in time wins (ties broken by the group's anchor article_id for
 determinism). No match -> a new single-article group (event) is opened.
+
+Hardening (Phase 10.1 #D): "unknown" is not a real category -- it means
+classification found no matching rule, not that two UNKNOWN articles are
+about the same kind of thing. So when BOTH the anchor and the candidate
+classify as `CatalystCategory.UNKNOWN`, category+symbol+window alone is not
+treated as sufficient; `headline_similarity` (a normalized-token Jaccard
+score) must also clear `config.unknown_category_min_headline_similarity`.
+No KNOWN category's grouping behavior changes -- a real, deterministically
+matched category is already a much stronger signal than headline text.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 
 from app.news.config import DEFAULT_CATALYST_CONFIG, CatalystConfig
-from app.news.schemas import CatalystEvent, NormalizedNewsArticle
+from app.news.schemas import CatalystCategory, CatalystEvent, NormalizedNewsArticle
+
+# Common English function words carrying no distinguishing meaning for
+# "are these two headlines about the same story" -- deliberately small and
+# hand-maintained, same convention as app.news.classification's keyword
+# lists, not an imported NLP stopword corpus.
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "the", "of", "in", "on", "for", "to", "and", "or", "with",
+        "by", "is", "are", "as", "at", "its", "it's", "from", "after",
+        "over", "into", "amid", "than", "will", "has", "have", "had",
+        "this", "that", "new", "says", "said",
+    }
+)
+_TOKEN_PATTERN = re.compile(r"[a-z0-9]+")
+
+
+def _normalized_tokens(headline: str) -> set[str]:
+    words = _TOKEN_PATTERN.findall(headline.lower())
+    return {w for w in words if w not in _STOPWORDS and len(w) > 2}
+
+
+def headline_similarity(a: str, b: str) -> float:
+    """Jaccard similarity over normalized headline tokens -- 0.0 (nothing in
+    common) to 1.0 (identical token sets). Used only to gate UNKNOWN-category
+    grouping (#D); known-category grouping never consults this."""
+    tokens_a, tokens_b = _normalized_tokens(a), _normalized_tokens(b)
+    if not tokens_a or not tokens_b:
+        return 0.0
+    intersection = tokens_a & tokens_b
+    union = tokens_a | tokens_b
+    return len(intersection) / len(union)
 
 
 def _compute_event_id(article_ids: list[str]) -> str:
@@ -82,6 +123,11 @@ def group_into_events(
             gap_hours = (article.published_at - anchor.published_at).total_seconds() / 3600.0
             if gap_hours < 0 or gap_hours > config.event_grouping_window_hours:
                 continue
+            if anchor.classification.category == CatalystCategory.UNKNOWN and (
+                headline_similarity(anchor.headline, article.headline)
+                < config.unknown_category_min_headline_similarity
+            ):
+                continue  # #D: category alone (UNKNOWN) is not a real signal
             if (
                 best_gap_hours is None
                 or gap_hours < best_gap_hours

@@ -92,6 +92,47 @@ def test_repository_as_of_query_is_unaffected_by_a_later_ingested_article():
     assert len(events_before) == 1
 
 
+def test_unknown_category_similarity_gate_is_also_as_of_safe():
+    """Phase 10.1 (#D): the headline-similarity gate for UNKNOWN-UNKNOWN
+    pairs must not weaken the anti-lookahead guarantee -- appending a
+    *textually similar* future UNKNOWN article must not change what an
+    earlier as_of query returns, exactly like any other article."""
+    repository = _in_memory_repository()
+    as_of = et(2026, 8, 20, 12, 0)
+
+    early = FixtureNewsProvider(
+        [
+            raw_article(
+                "Acme Corp shakes up leadership team amid strategy shift",
+                et(2026, 8, 20, 9, 0),
+                ["ACME"],
+            )
+        ]
+    ).fetch_symbol_news("ACME", et(2026, 1, 1), et(2026, 12, 31), as_of)
+    repository.upsert_articles(early)
+
+    events_before = repository.events_for_symbol_as_of("ACME", et(2026, 1, 1), et(2026, 12, 31), as_of)
+    assert len(events_before) == 1
+
+    # A textually SIMILAR future article (would merge if visible) published
+    # after `as_of`.
+    future = FixtureNewsProvider(
+        [
+            raw_article(
+                "Acme Corp leadership shakeup signals new strategy",
+                et(2026, 8, 25, 9, 0),
+                ["ACME"],
+            )
+        ]
+    ).fetch_symbol_news("ACME", et(2026, 1, 1), et(2026, 12, 31), et(2026, 12, 31))
+    repository.upsert_articles(future)
+
+    events_after = repository.events_for_symbol_as_of("ACME", et(2026, 1, 1), et(2026, 12, 31), as_of)
+    assert [e.event_id for e in events_before] == [e.event_id for e in events_after]
+    assert len(events_after) == 1
+    assert len(events_after[0].contributing_article_ids) == 1
+
+
 def test_events_for_symbol_as_of_excludes_articles_published_after_as_of():
     repository = _in_memory_repository()
     provider = FixtureNewsProvider(

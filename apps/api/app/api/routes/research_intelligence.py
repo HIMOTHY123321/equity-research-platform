@@ -235,12 +235,26 @@ def _pooled_entries(run_ids: list[str], repository: SqlAlchemyResearchRepository
     return entries
 
 
+def setup_type_direction_filter(
+    entries: list[SetupLedgerEntry], body: ResearchQueryRequest
+) -> list[SetupLedgerEntry]:
+    """setup_type/direction only -- deliberately ignores `qualification_state`
+    so both a qualified and a rejected side remain available for a
+    qualified-vs-rejected comparison. Exported so
+    app.api.routes.research_catalysts can build the exact same "population
+    a catalyst filter should be applied within" pool this function's own
+    caller (`compute_research_query_response`) uses internally, rather than
+    re-deriving a slightly different one (#B)."""
+    return [
+        e
+        for e in entries
+        if (body.setup_type is None or e.setup_type == body.setup_type)
+        and (body.direction is None or e.direction == body.direction)
+    ]
+
+
 def _apply_filters(entries: list[SetupLedgerEntry], body: ResearchQueryRequest) -> list[SetupLedgerEntry]:
-    filtered = entries
-    if body.setup_type is not None:
-        filtered = [e for e in filtered if e.setup_type == body.setup_type]
-    if body.direction is not None:
-        filtered = [e for e in filtered if e.direction == body.direction]
+    filtered = setup_type_direction_filter(entries, body)
     if body.qualification_state is not None:
         filtered = [e for e in filtered if e.detection.current_state == body.qualification_state]
     return filtered
@@ -312,12 +326,7 @@ def compute_research_query_response(
     maturity, maturity_basis = classify_evidence_maturity(evidence_card, config=config)
 
     stability_comparison = None
-    setup_type_direction_pool = [
-        e
-        for e in raw_pool
-        if (body.setup_type is None or e.setup_type == body.setup_type)
-        and (body.direction is None or e.direction == body.direction)
-    ]
+    setup_type_direction_pool = setup_type_direction_filter(raw_pool, body)
     qualified = [e for e in setup_type_direction_pool if e.detection.current_state == "qualified"]
     rejected = [e for e in setup_type_direction_pool if e.detection.current_state == "rejected"]
     if qualified and rejected:

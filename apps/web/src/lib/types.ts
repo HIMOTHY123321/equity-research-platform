@@ -1228,7 +1228,13 @@ export interface CatalystEventDetail {
 }
 
 export interface CatalystResearchQueryResponse extends ResearchQueryResponse {
-  catalyst_filtered_sample_count: number;
-  unfiltered_sample_count: number;
+  // Explicitly RAW ledger-entry counts (Phase 10.1 #B) -- never the
+  // independent sample size; see `independence.sample_composition` for
+  // episode/purged counts.
+  catalyst_filtered_raw_sample_count: number;
+  unfiltered_raw_sample_count: number;
   catalyst_filters_applied: Record<string, unknown>;
+  qualification_lift: ConclusionStabilityReport | null;
+  rejection_value: Record<string, ConclusionStabilityReport>;
+  catalyst_vs_baseline: ConclusionStabilityReport | null;
 }
