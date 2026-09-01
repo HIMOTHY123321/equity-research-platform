@@ -399,6 +399,20 @@ def query_analogs(
     `/setups` response or a historical ledger entry's `detection` -- both
     are the same `SetupCandidate` shape, and this route never looks past
     each candidate's own `candidate_candle_timestamp` (#25)."""
+    return compute_analog_query_response(body, provider, repository, news_provider, news_repository)
+
+
+def compute_analog_query_response(
+    body: AnalogQueryRequest,
+    provider: MarketDataProvider,
+    repository: SqlAlchemyResearchRepository,
+    news_provider: NewsProvider,
+    news_repository: SqlAlchemyNewsRepository,
+) -> AnalogQueryResponse:
+    """The analog-ranking core, extracted so app.ai_analysis.evidence_packet
+    (Phase 11) can compose a setup's historical_analogs section with the
+    identical ranking/diversity pipeline `/api/research/analogs` already
+    runs, without duplicating it."""
     corpus_entries: list[SetupLedgerEntry] = []
     for run_id in body.corpus_run_ids:
         if repository.get_run(run_id) is None:

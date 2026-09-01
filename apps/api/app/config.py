@@ -52,6 +52,14 @@ class Settings(BaseSettings):
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
 
+    # AI Research Analyst provider selection (Phase 11): "mock" (default --
+    # deterministic, no credentials needed, used by every test) or "openai"
+    # (development-only real-model synthesis; requires openai_api_key).
+    # Every AI-provider output is independently grounded/validated
+    # (app.ai_analysis.validation) regardless of which provider produced it
+    # -- never hard-code a choice elsewhere in the codebase.
+    ai_analysis_provider: str = "mock"
+
     # Scheduling
     scheduler_shared_secret: str = ""
     report_timezone: str = "America/New_York"

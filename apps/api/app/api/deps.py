@@ -11,6 +11,7 @@ directly.
 from __future__ import annotations
 
 from functools import lru_cache
+from typing import TYPE_CHECKING
 
 from app.config import get_settings
 from app.market_data.alpaca_provider import AlpacaMarketDataProvider
@@ -22,6 +23,9 @@ from app.news.fixture_provider import FixtureNewsProvider
 from app.news.provider import NewsProvider
 from app.news.yfinance_provider import YFinanceNewsProvider
 from app.watchlist.repository import InMemoryWatchlistRepository, WatchlistRepository
+
+if TYPE_CHECKING:
+    from app.ai_analysis.provider import AIAnalysisProvider
 
 
 @lru_cache
@@ -58,3 +62,32 @@ def get_news_provider() -> NewsProvider:
     if provider_name == "fixture":
         return FixtureNewsProvider([])
     raise ValueError(f"Unknown NEWS_PROVIDER {provider_name!r}; expected 'yfinance' or 'fixture'")
+
+
+@lru_cache
+def get_ai_analysis_provider() -> "AIAnalysisProvider":
+    """Never raises for a missing/invalid OpenAI key -- an unusable "openai"
+    selection silently falls back to the mock provider so the product keeps
+    working with deterministic evidence only (#C), matching
+    AIAnalysisUnavailableError's contract at the provider-method level.
+
+    Imports are local, not module-level: app.ai_analysis.schemas embeds
+    route-defined response models (the same cross-module reuse
+    research_catalysts.py already does for research_intelligence.py's
+    ResearchQueryResponse), which makes app.ai_analysis import back through
+    app.api.routes.* -- a module-level import here would be circular."""
+    from app.ai_analysis.mock_provider import MockAIAnalysisProvider
+
+    provider_name = get_settings().ai_analysis_provider.lower()
+    if provider_name == "mock":
+        return MockAIAnalysisProvider()
+    if provider_name == "openai":
+        from app.ai_analysis.openai_provider import OpenAIAnalysisProvider
+        from app.ai_analysis.provider import AIAnalysisUnavailableError
+
+        settings = get_settings()
+        try:
+            return OpenAIAnalysisProvider(settings.openai_api_key, settings.openai_model)
+        except AIAnalysisUnavailableError:
+            return MockAIAnalysisProvider()
+    raise ValueError(f"Unknown AI_ANALYSIS_PROVIDER {provider_name!r}; expected 'mock' or 'openai'")

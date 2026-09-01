@@ -1,14 +1,17 @@
 import type {
   AnalogQueryResponse,
+  AnalysisMode,
   CandlesResponse,
   CatalystEvent,
   CatalystEventDetail,
   CatalystResearchQueryResponse,
+  EvidencePacket,
   FeatureSnapshot,
   LedgerEntriesResponse,
   MarketReaction,
   MarketStructureSnapshot,
   NormalizedNewsArticle,
+  ResearchBrief,
   ResearchQueryResponse,
   ResearchRun,
   ResearchRunSummary,
@@ -312,4 +315,35 @@ export function postCatalystResearchQuery(
       compare_to_no_catalyst: params.compareToNoCatalyst ?? false,
     }),
   });
+}
+
+// ---- AI Research Analyst (Phase 11) -----------------------------------------
+
+export interface EvidencePacketParams {
+  symbol: string;
+  timeframe: string;
+  setupId?: string;
+  asOf?: string;
+}
+
+export function getEvidencePacket(params: EvidencePacketParams): Promise<EvidencePacket> {
+  const query = new URLSearchParams({ timeframe: params.timeframe });
+  if (params.setupId) query.set("setup_id", params.setupId);
+  if (params.asOf) query.set("as_of", params.asOf);
+  return request<EvidencePacket>(`/api/analysis/${params.symbol}/evidence?${query}`);
+}
+
+export interface ResearchBriefParams extends EvidencePacketParams {
+  mode: AnalysisMode;
+}
+
+export function postResearchBrief(params: ResearchBriefParams): Promise<ResearchBrief> {
+  const query = new URLSearchParams({ timeframe: params.timeframe, mode: params.mode });
+  if (params.setupId) query.set("setup_id", params.setupId);
+  if (params.asOf) query.set("as_of", params.asOf);
+  return request<ResearchBrief>(`/api/analysis/${params.symbol}/brief?${query}`, { method: "POST" });
+}
+
+export function getResearchBrief(symbol: string, briefId: string): Promise<ResearchBrief> {
+  return request<ResearchBrief>(`/api/analysis/${symbol}/brief/${briefId}`);
 }

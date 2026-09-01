@@ -105,7 +105,7 @@ npm run build
 
 ## Status
 
-Phases 1-10 are complete. Phases 1-5 built the market data engine, the
+Phases 1-11 are complete. Phases 1-5 built the market data engine, the
 deterministic feature/market-structure/support-resistance engines (`GET
 /api/market/{symbol}/{features,structure,levels}`), all under the same
 `as_of`/no-lookahead discipline the rest of the pipeline reuses. Phase 6
@@ -133,7 +133,23 @@ descriptive vocabulary, never a buy/sell signal), additive extensions to
 the Phase 8/9 cohort and historical-analog engines, and dashboard surfaces
 ("What's Moving the Market," a per-symbol catalyst timeline, and a Catalyst
 Context section on every setup card) — see `/api/news/*` and
-`/api/catalysts/*`. `scoring/`, `risk_reward/`, `ai_analysis/`,
+`/api/catalysts/*`. Phase 10.1 hardened the catalyst-scoped research
+pipeline (qualification/rejection lift, catalyst-vs-baseline comparison, a
+dedicated Catalyst Research Lab section) and event-grouping safety.
+
+Phase 11 (ADR 0014) added an AI Research Analyst that sits strictly
+downstream of every deterministic engine above: a composed, immutable
+`EvidencePacket` (`app/ai_analysis/evidence_packet.py`), deterministic
+`EvidenceClaim`s derived from it, a provider-independent
+`AIAnalysisProvider` abstraction (a deterministic mock provider by default;
+an optional, dev-only real-model provider requiring `OPENAI_API_KEY`), and
+a `ResearchBrief` synthesis pipeline that is independently grounded/
+validated against the evidence before being served — rejecting invented
+numbers, unknown evidence citations, and any BUY/SELL/probability language,
+falling back to a deterministic-only brief whenever validation fails or no
+provider is configured (`/api/analysis/*`, an "AI Research Analyst" panel on
+every setup card). RANKING GATE remains **FAIL**; nothing in Phase 11
+computes a score, rank, or recommendation. `scoring/`, `risk_reward/`,
 `backtesting/`, and `reporting/` remain unimplemented placeholder packages;
 see `docs/decisions/` and commit history for what's landed phase by phase.
 

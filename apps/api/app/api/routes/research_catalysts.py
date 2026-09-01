@@ -160,6 +160,23 @@ def catalyst_research_query(
     repository: SqlAlchemyResearchRepository = Depends(_repository),
     news_repository: SqlAlchemyNewsRepository = Depends(_news_repository),
 ) -> CatalystResearchQueryResponse:
+    return compute_catalyst_research_query_response(
+        body, provider, news_provider, repository, news_repository
+    )
+
+
+def compute_catalyst_research_query_response(
+    body: CatalystResearchQueryRequest,
+    provider: MarketDataProvider,
+    news_provider: NewsProvider,
+    repository: SqlAlchemyResearchRepository,
+    news_repository: SqlAlchemyNewsRepository,
+) -> CatalystResearchQueryResponse:
+    """The catalyst-scoped query core, extracted (same reason
+    `compute_research_query_response` was extracted in Phase 10.1) so
+    app.ai_analysis.evidence_packet can run the identical catalyst-filtered
+    Phase 8/9 pipeline when composing a setup's historical_research section,
+    without duplicating a single line of it."""
     raw_pool = _pooled_entries(body.run_ids, repository)
 
     # The population a catalyst filter applies within: setup_type/direction

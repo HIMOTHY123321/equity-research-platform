@@ -27,6 +27,8 @@ EXPECTED_TABLES = {
     "catalyst_events",
     "catalyst_event_articles",
     "catalyst_reactions",
+    "evidence_packets",
+    "research_briefs",
 }
 
 

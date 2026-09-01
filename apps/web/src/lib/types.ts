@@ -1238,3 +1238,84 @@ export interface CatalystResearchQueryResponse extends ResearchQueryResponse {
   rejection_value: Record<string, ConclusionStabilityReport>;
   catalyst_vs_baseline: ConclusionStabilityReport | null;
 }
+
+// ---- AI Research Analyst (Phase 11) ----------------------------------------
+//
+// The AI is strictly downstream of the deterministic evidence above -- an
+// EvidencePacket only ever embeds already-typed Phase 1-10.1 schemas by
+// reference, never re-derives a number. A ResearchBrief's prose is
+// independently grounded against those same fields server-side
+// (app.ai_analysis.validation) before it is ever returned here.
+
+export interface EvidenceSetupSection {
+  candidate: SetupCandidate;
+  qualified: boolean;
+  qualification_reasons: string[];
+  rejection_reasons: string[];
+  near_miss_reasons: string[];
+  conflict_reasons: string[];
+}
+
+export interface EvidenceDataQuality {
+  missing_evidence: string[];
+  stale_evidence: string[];
+  insufficient_history: boolean;
+  provider_limitations: string[];
+  research_limitations: string[];
+}
+
+export interface EvidenceProvenance {
+  market_data_provider: string;
+  news_provider: string | null;
+  research_run_ids: string[];
+  analog_corpus_run_ids: string[];
+  generated_at: string;
+}
+
+export interface EvidencePacket {
+  packet_id: string;
+  schema_version: string;
+  as_of: string;
+  generated_at: string;
+  symbol: string;
+  timeframe: string;
+  session: MarketSession | null;
+  current_price: number | null;
+  setup: EvidenceSetupSection | null;
+  structure: MarketStructureSnapshot;
+  multi_timeframe_structure: Record<string, MarketStructureSnapshot>;
+  support_resistance: SupportResistanceSnapshot;
+  features: FeatureSnapshot;
+  historical_research: CatalystResearchQueryResponse | null;
+  historical_analogs: AnalogQueryResponse | null;
+  catalyst_context: SetupCatalystContext | null;
+  nearest_catalyst_event: CatalystEvent | null;
+  ranking_gate_status: string;
+  data_quality: EvidenceDataQuality;
+  provenance: EvidenceProvenance;
+}
+
+export type AnalysisMode = "quick" | "full" | "why_this_setup" | "why_not" | "catalyst" | "analogs";
+
+export interface ResearchBrief {
+  brief_id: string;
+  evidence_packet_id: string;
+  mode: AnalysisMode;
+  situation_summary: string;
+  setup_explanation: string;
+  supporting_evidence: string[];
+  contradictory_evidence: string[];
+  catalyst_context: string;
+  historical_context: string;
+  uncertainty: string[];
+  invalidation_conditions: string[];
+  monitor_next: string[];
+  evidence_refs: string[];
+  generated_at: string;
+  as_of: string;
+  provider: string;
+  model: string | null;
+  prompt_version: string;
+  grounding_rejected: boolean;
+  grounding_violations: string[];
+}

@@ -615,3 +615,55 @@ class CatalystReactionRecord(Base):
     timeframe: Mapped[str] = mapped_column(String(8))
     reaction: Mapped[dict] = mapped_column(JSON)
     computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 11: AI Research Analyst. `EvidencePacketRecord` and
+# `ResearchBriefRecord` are immutable snapshots, same convention as
+# `ResearchSnapshotRecord` -- a packet/brief is never updated in place; a
+# re-generated analysis for the same symbol/setup/as_of is always a new row,
+# so an old one stays inspectable (#K "immutable historical snapshots").
+# `packet_id`/`brief_id` are the deterministic, content-derived business keys
+# (app.ai_analysis.evidence_packet/brief) that make a re-build idempotent --
+# same convention as `article_id`/`event_id` in Phase 10.
+# ---------------------------------------------------------------------------
+
+
+class EvidencePacketRecord(Base):
+    """One immutable EvidencePacket (#A/#K). The full Pydantic payload is
+    stored verbatim as JSON so schema evolution (a new `schema_version`)
+    never requires a migration -- only the columns queried on directly
+    (symbol/timeframe/as_of/setup_id) are broken out."""
+
+    __tablename__ = "evidence_packets"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    packet_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    schema_version: Mapped[str] = mapped_column(String(16), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8), index=True)
+    setup_id: Mapped[Optional[str]] = mapped_column(String(80), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ResearchBriefRecord(Base):
+    """One immutable ResearchBrief (#D/#K), always bound to the
+    EvidencePacket it was synthesized from via `evidence_packet_id`
+    (business key, not a foreign key to the internal uuid pk -- a brief must
+    remain inspectable even if the packet row's own lifecycle differs)."""
+
+    __tablename__ = "research_briefs"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    brief_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    evidence_packet_id: Mapped[str] = mapped_column(String(64), index=True)
+    mode: Mapped[str] = mapped_column(String(32), index=True)
+    provider: Mapped[str] = mapped_column(String(64), index=True)
+    model: Mapped[Optional[str]] = mapped_column(String(64))
+    prompt_version: Mapped[str] = mapped_column(String(16))
+    grounding_rejected: Mapped[bool] = mapped_column(Boolean, default=False)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

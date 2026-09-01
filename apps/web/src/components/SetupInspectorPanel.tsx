@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { AIResearchAnalystPanel } from "@/components/AIResearchAnalystPanel";
 import { AnalogSearchButton } from "@/components/AnalogSearchButton";
 import { CatalystContextCard } from "@/components/CatalystContextCard";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
@@ -123,6 +124,7 @@ function SetupCard({ candidate }: { candidate: SetupCandidate }) {
           <EvidenceTree candidate={candidate} />
           <CatalystContextCard candidate={candidate} />
           <AnalogSearchButton candidate={candidate} />
+          <AIResearchAnalystPanel candidate={candidate} />
         </>
       )}
     </li>
@@ -171,6 +173,7 @@ function NearMissCard({ candidate }: { candidate: SetupCandidate }) {
             ))}
           <CatalystContextCard candidate={candidate} />
           <AnalogSearchButton candidate={candidate} />
+          <AIResearchAnalystPanel candidate={candidate} />
         </div>
       )}
     </li>
