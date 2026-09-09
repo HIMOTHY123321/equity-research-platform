@@ -27,30 +27,28 @@ from typing import TYPE_CHECKING, Optional
 
 from fastapi import HTTPException
 
+from app.ai_analysis.market_snapshot import build_market_snapshot
 from app.ai_analysis.schemas import (
     EvidenceDataQuality,
+    EvidenceMode,
     EvidencePacket,
     EvidenceProvenance,
     EvidenceSetupSection,
 )
-from app.api.routes.market import CANDLE_LIMIT_BY_TIMEFRAME, LEVEL_SOURCE_TIMEFRAMES
+from app.api.routes.market import CANDLE_LIMIT_BY_TIMEFRAME
 from app.api.routes.research_catalysts import (
     CatalystResearchQueryRequest,
     compute_catalyst_research_query_response,
 )
 from app.api.routes.research_intelligence import AnalogQueryRequest, compute_analog_query_response
 from app.config import get_settings
-from app.features.engine import compute_feature_snapshot
-from app.market_structure.engine import compute_market_structure_snapshot
 from app.news.config import DEFAULT_CATALYST_CONFIG, CatalystConfig
 from app.news.reaction import measure_market_reaction
 from app.news.schemas import CatalystEvent, MarketReaction, SetupCatalystContext
 from app.news.setup_linking import build_setup_catalyst_context
 from app.research.repository import ResearchRepository
 from app.schemas.market_data import Timeframe
-from app.setup_detection.engine import compute_setup_detection_snapshot
 from app.setup_detection.schemas import SetupCandidate, SetupDetectionSnapshot
-from app.support_resistance.engine import compute_support_resistance_snapshot
 
 if TYPE_CHECKING:
     from app.market_data.provider import MarketDataProvider
@@ -114,63 +112,9 @@ def _build_setup_section(candidate: SetupCandidate) -> EvidenceSetupSection:
     )
 
 
-def _market_snapshot_bundle(
-    symbol: str, timeframe: Timeframe, provider: "MarketDataProvider", as_of: datetime
-):
-    """The same four-engine orchestration app.api.routes.market.get_setups
-    runs, parameterized by an explicit `as_of` instead of an implicit
-    `datetime.now()`. Each compute_* call truncates its own candles to
-    `as_of` internally, so this is safe for a historical `as_of` as long as
-    the fetched candle window reaches back far enough."""
-    candles_by_tf: dict[Timeframe, list] = {}
-
-    def candles(tf: Timeframe) -> list:
-        if tf not in candles_by_tf:
-            candles_by_tf[tf] = provider.get_candles(symbol, tf, limit=CANDLE_LIMIT_BY_TIMEFRAME[tf])
-        return candles_by_tf[tf]
-
-    daily_candles = candles(Timeframe.ONE_DAY)
-    primary_candles = candles(timeframe)
-
-    feature_snapshot = compute_feature_snapshot(
-        symbol=symbol,
-        timeframe=timeframe,
-        primary_candles=primary_candles,
-        daily_candles=daily_candles,
-        as_of=as_of,
-    )
-
-    structure_timeframes = set(LEVEL_SOURCE_TIMEFRAMES) | {timeframe}
-    structure_by_timeframe = {
-        tf: compute_market_structure_snapshot(symbol, tf, candles(tf), as_of) for tf in structure_timeframes
-    }
-
-    levels_snapshot = compute_support_resistance_snapshot(
-        symbol=symbol,
-        timeframe=timeframe,
-        primary_candles=primary_candles,
-        daily_candles=daily_candles,
-        structure_snapshots=structure_by_timeframe,
-        as_of=as_of,
-    )
-
-    setup_snapshot = compute_setup_detection_snapshot(
-        symbol=symbol,
-        timeframe=timeframe,
-        candles=primary_candles,
-        daily_candles=daily_candles,
-        feature_snapshot=feature_snapshot,
-        structure_by_timeframe=structure_by_timeframe,
-        levels_snapshot=levels_snapshot,
-        as_of=as_of,
-    )
-
-    return feature_snapshot, structure_by_timeframe, levels_snapshot, setup_snapshot
-
-
-def _matching_run_ids(
+def _matching_runs(
     research_repository: ResearchRepository, symbol: str, timeframe: str, as_of: datetime
-) -> list[str]:
+) -> list:
     """Every persisted, completed research run for this exact symbol/
     timeframe whose own `end_date` is at or before `as_of` -- never a run
     whose replay window extends past the instant this packet claims to
@@ -180,7 +124,7 @@ def _matching_run_ids(
     used in `provenance` (auditable, per #J)."""
     runs = research_repository.list_runs(limit=_MAX_RESEARCH_RUNS_SCANNED)
     return [
-        run.id
+        run
         for run in runs
         if run.symbol == symbol
         and run.timeframe == timeframe
@@ -260,6 +204,11 @@ def build_evidence_packet(
     include_catalyst: bool = True,
     catalyst_config: CatalystConfig = DEFAULT_CATALYST_CONFIG,
 ) -> EvidencePacket:
+    # `mode` reflects caller intent, not clock proximity (#L): omitting
+    # `as_of` means "give me the current state" (LIVE); passing one --
+    # even a recent one -- means "give me exactly what was known at this
+    # instant" (HISTORICAL_SNAPSHOT). The two are never blurred.
+    mode = EvidenceMode.LIVE if as_of is None else EvidenceMode.HISTORICAL_SNAPSHOT
     resolved_as_of = as_of or datetime.now(timezone.utc)
     if resolved_as_of.tzinfo is None:
         resolved_as_of = resolved_as_of.replace(tzinfo=timezone.utc)
@@ -270,9 +219,21 @@ def build_evidence_packet(
         "News provider coverage is not a guaranteed complete historical archive (ADR 0013).",
     ]
 
-    feature_snapshot, structure_by_timeframe, levels_snapshot, setup_snapshot = _market_snapshot_bundle(
-        symbol, timeframe, market_provider, resolved_as_of
-    )
+    market_snapshot = build_market_snapshot(symbol, timeframe, market_provider, resolved_as_of)
+    feature_snapshot = market_snapshot.feature_snapshot
+    structure_by_timeframe = market_snapshot.structure_by_timeframe
+    levels_snapshot = market_snapshot.levels_snapshot
+    setup_snapshot = market_snapshot.setup_snapshot
+
+    if market_snapshot.market_data_cutoff is None or (
+        mode == EvidenceMode.HISTORICAL_SNAPSHOT
+        and setup_snapshot.data_quality.status.value == "unavailable"
+    ):
+        missing_evidence.append("market_data")
+        research_limitations.append(
+            f"Market data could not be reconstructed back to as_of={resolved_as_of.isoformat()} "
+            "-- provider retention/history does not reach that far."
+        )
 
     setup_section: Optional[EvidenceSetupSection] = None
     candidate: Optional[SetupCandidate] = None
@@ -282,7 +243,11 @@ def build_evidence_packet(
             raise SetupNotFoundError(setup_id)
         setup_section = _build_setup_section(candidate)
 
-    run_ids = _matching_run_ids(research_repository, symbol, timeframe.value, resolved_as_of)
+    matching_runs = _matching_runs(research_repository, symbol, timeframe.value, resolved_as_of)
+    run_ids = [run.id for run in matching_runs]
+    research_snapshot_cutoff = (
+        max(_ensure_utc(run.end_date) for run in matching_runs) if matching_runs else None
+    )
     if not run_ids:
         research_limitations.append(
             f"No completed research runs persisted for {symbol}/{timeframe.value} at or before as_of"
@@ -361,12 +326,17 @@ def build_evidence_packet(
 
     return EvidencePacket(
         packet_id=_deterministic_packet_id(symbol, timeframe.value, resolved_as_of, setup_id),
+        pipeline_version=market_snapshot.pipeline_version,
+        mode=mode,
         as_of=resolved_as_of,
         generated_at=provenance.generated_at,
         symbol=symbol,
         timeframe=timeframe.value,
         session=session_label.value if session_label is not None else None,
         current_price=current_price,
+        market_data_cutoff=market_snapshot.market_data_cutoff,
+        news_cutoff=resolved_as_of if include_catalyst else None,
+        research_snapshot_cutoff=research_snapshot_cutoff,
         setup=setup_section,
         structure=structure_by_timeframe[timeframe],
         multi_timeframe_structure={tf.value: snap for tf, snap in structure_by_timeframe.items()},

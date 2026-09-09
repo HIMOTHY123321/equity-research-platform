@@ -13,7 +13,6 @@ from app.market_structure.schemas import MarketStructureSnapshot
 from app.schemas.market_data import Timeframe
 from app.schemas.responses import CandlesResponse, SymbolQuoteResponse
 from app.schemas.symbols import InvalidTickerError, normalize_ticker
-from app.setup_detection.engine import compute_setup_detection_snapshot
 from app.setup_detection.schemas import SetupDetectionSnapshot
 from app.support_resistance.engine import compute_support_resistance_snapshot
 from app.support_resistance.schemas import SupportResistanceSnapshot
@@ -226,43 +225,16 @@ def get_setups(
 ) -> SetupDetectionSnapshot:
     """Thin orchestration (#39): Market Data -> Features -> Structure ->
     Support/Resistance -> Setup Detection -> Response. No detection logic
-    lives here; this only assembles the four already-lookahead-safe engine
-    outputs and hands them to compute_setup_detection_snapshot."""
+    lives here -- this delegates to app.ai_analysis.market_snapshot
+    .build_market_snapshot, the same canonical point-in-time pipeline
+    app.ai_analysis.evidence_packet uses for a historical `as_of` (Phase
+    11.1 #B): "live" is simply that pipeline called with `as_of=now()`,
+    never a second implementation of the four engines below."""
+    from app.ai_analysis.market_snapshot import build_market_snapshot
+
     validated_symbol = _validated_symbol(symbol)
     validated_timeframe = _validated_timeframe(timeframe)
     as_of = datetime.now(timezone.utc)
-    cache = _CandleCache(provider, validated_symbol, as_of)
 
-    daily_candles = cache.candles(Timeframe.ONE_DAY)
-    primary_candles = cache.candles(validated_timeframe)
-
-    feature_snapshot = compute_feature_snapshot(
-        symbol=validated_symbol,
-        timeframe=validated_timeframe,
-        primary_candles=primary_candles,
-        daily_candles=daily_candles,
-        as_of=as_of,
-    )
-
-    structure_timeframes = set(LEVEL_SOURCE_TIMEFRAMES) | {validated_timeframe}
-    structure_by_timeframe = {tf: cache.structure(tf) for tf in structure_timeframes}
-
-    levels_snapshot = compute_support_resistance_snapshot(
-        symbol=validated_symbol,
-        timeframe=validated_timeframe,
-        primary_candles=primary_candles,
-        daily_candles=daily_candles,
-        structure_snapshots=structure_by_timeframe,
-        as_of=as_of,
-    )
-
-    return compute_setup_detection_snapshot(
-        symbol=validated_symbol,
-        timeframe=validated_timeframe,
-        candles=primary_candles,
-        daily_candles=daily_candles,
-        feature_snapshot=feature_snapshot,
-        structure_by_timeframe=structure_by_timeframe,
-        levels_snapshot=levels_snapshot,
-        as_of=as_of,
-    )
+    snapshot = build_market_snapshot(validated_symbol, validated_timeframe, provider, as_of, now=as_of)
+    return snapshot.setup_snapshot

@@ -62,15 +62,18 @@ research and catalyst/news sections are separately `as_of`-bounded:
   (which itself performs no fetching, by design) with events/reactions the
   caller has already `as_of`-filtered.
 
-**Scoping decision**: no route in this codebase performs point-in-time
-reconstruction of structure/S&R/features for an arbitrary historical instant
-via live provider calls except through the Phase 7 replay engine's own
-ledger. `build_evidence_packet` extends the *existing* `truncate_to_as_of`
-mechanism to accept a historical `as_of`, which works correctly as proven by
-`tests/unit/ai_analysis/test_evidence_packet_determinism.py`, but candle
-*depth* for a very old `as_of` is bounded by the same per-timeframe limits
-live routes use (`CANDLE_LIMIT_BY_TIMEFRAME`) -- this is an accepted,
-documented limitation (see Limitations), not a silent gap.
+**Scoping decision (superseded by ADR 0015):** at the time this phase
+shipped, `build_evidence_packet` fetched market data using the same
+fixed, live-sized candle limit regardless of how historical `as_of` was,
+which could leave a historical packet's market-derived sections thinner
+than the provider's real retention would allow. Phase 11.1 (ADR 0015)
+replaced this with a canonical, `as_of`-aware candle-fetch sizing function
+(`app.ai_analysis.market_snapshot.build_market_snapshot`), used by both the
+live dashboard and `build_evidence_packet`, with real replay-parity and
+append-future-invariant proof. See ADR 0015 for the full design and the
+(narrower) limitation that remains: provider reach is still bounded by
+actual retention, now reported honestly via existing insufficient/
+unavailable data_quality states rather than silently thin output.
 
 Every packet has a `packet_id` (sha256 of schema_version|symbol|timeframe|
 as_of|setup_id, same convention as `article_id`/`event_id` in Phase 10 --
@@ -266,10 +269,12 @@ with that framing.
 
 ## Limitations
 
-- Live ("as_of=now") packets reuse the exact candle depth live `/api/market`
-  routes use (`CANDLE_LIMIT_BY_TIMEFRAME`); a historical `as_of` far enough
-  in the past may see thinner trailing history than a full backtest would
-  provide.
+- ~~Live ("as_of=now") packets reuse the exact candle depth live
+  `/api/market` routes use; a historical `as_of` far enough in the past may
+  see thinner trailing history.~~ **Superseded by ADR 0015**: candle-fetch
+  depth is now sized from `as_of`'s age; remaining reach limits are the
+  provider's genuine retention, reported via data_quality rather than
+  silently thin output.
 - `historical_research`/`historical_analogs` pool *every* persisted,
   completed research run for the exact symbol/timeframe as of `as_of` --
   there is no per-request cohort selection (unlike Research Lab's

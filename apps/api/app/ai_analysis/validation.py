@@ -4,8 +4,8 @@ AI responses (and, transitively, any text an untrusted news headline or
 source field could have injected into a prompt, #O) are validated the same
 way regardless of which provider produced them.
 
-Three independent checks, each a plain deterministic function so they are
-individually unit-testable:
+Checks, each a plain deterministic function so they are individually
+unit-testable:
 
 1. Evidence-ref grounding -- every ref the brief cites must already exist on
    one of the supplied claims. A citation to a nonexistent id is rejected.
@@ -13,7 +13,19 @@ individually unit-testable:
    traceable (within rounding tolerance) to a number already present
    somewhere in the EvidencePacket/claims. A number that isn't is treated as
    invented (a price, a sample count, a percentage the AI made up).
-3. Banned language -- BUY/SELL/recommendation directives and probability/
+3. Typed factual-claim grounding (#Phase 11.1 I) -- a small set of common,
+   *recognizable* statement shapes are checked against the SPECIFIC typed
+   field they claim to describe, not just "this number appears somewhere in
+   the packet": a price described as a resistance/support level must match
+   an actual resistance/support zone (not merely a coincidentally-grounded
+   unrelated number); an episode/sample count must match the actual
+   independence-adjusted count; a catalyst timing claim must be derivable
+   from the actual catalyst timestamps. This is strictly additive to #2 --
+   it never widens what's accepted, only narrows it for statement shapes it
+   recognizes. Deliberately narrow in scope: subjective prose ("momentum is
+   fading") is never typed-checked, only claims with an unambiguous
+   quantitative shape.
+4. Banned language -- BUY/SELL/recommendation directives and probability/
    certainty claims ("73% chance", "guaranteed") are never allowed,
    regardless of grounding, per Phase 9's RANKING GATE and the product's
    "descriptive, never predictive" boundary.
@@ -51,8 +63,22 @@ _BANNED_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("recommendation_language", re.compile(r"\brecommend(?:ed|s|ation)?\b", re.IGNORECASE)),
     ("probability_claim", re.compile(r"\d+(?:\.\d+)?\s*%\s*chance", re.IGNORECASE)),
     ("probability_claim_alt", re.compile(r"\bprobability\s+of\b", re.IGNORECASE)),
+    ("win_rate_claim", re.compile(r"\d+(?:\.\d+)?\s*%\s*win\s*rate", re.IGNORECASE)),
     ("certainty_claim", re.compile(r"\bguarantee[ds]?\b", re.IGNORECASE)),
     ("certainty_claim_alt", re.compile(r"\bsure\s+thing\b", re.IGNORECASE)),
+    # (Phase 11.1 #J) Defense in depth: a brief's own text should never
+    # contain prompt-injection-style phrasing or a fabricated claim that
+    # the RANKING GATE (a static, binding constant -- app.ai_analysis
+    # .schemas.RANKING_GATE_STATUS) was ever anything but FAIL. Untrusted
+    # provider content is never trusted to begin with (#O); this catches
+    # the case where a brief's own prose echoes/acts on an injection
+    # attempt rather than reporting it as plain data.
+    ("prompt_injection_marker", re.compile(r"ignore\s+all\s+(?:previous\s+)?instructions", re.IGNORECASE)),
+    ("prompt_injection_marker_alt", re.compile(r"</?system>", re.IGNORECASE)),
+    (
+        "ranking_gate_override_claim",
+        re.compile(r"ranking\s+gate\s*(?:[:=]|is|has)?\s*(?:passed|pass|ok|success)", re.IGNORECASE),
+    ),
 ]
 
 _TEXT_FIELDS = (
@@ -199,6 +225,136 @@ def check_numeric_grounding(
     return violations
 
 
+_PRICE_LEVEL_PATTERN = re.compile(
+    # A dollar-prefixed amount, or a decimal price (real prices in this
+    # product are never bare integers -- "2 zones"/"3 levels" are counts,
+    # not prices, and must NOT match here; requiring a `$` or a decimal
+    # point is what tells the two apart).
+    r"\$(\d+(?:\.\d+)?)\s*(?:resistance|support|zone|level)"
+    r"|(\d+\.\d+)\s*(?:resistance|support|zone|level)"
+    r"|(?:resistance|support|zone|level)(?:\s+\w+){0,3}?\s+(?:at|of|near)?\s*\$(\d+(?:\.\d+)?)",
+    re.IGNORECASE,
+)
+_EPISODE_COUNT_PATTERN = re.compile(
+    r"(\d+)\s*(?:independent\s+)?episodes?", re.IGNORECASE
+)
+_RAW_SAMPLE_COUNT_PATTERN = re.compile(
+    r"(\d+)\s*(?:raw\s+)?samples?\b", re.IGNORECASE
+)
+_TIMING_PATTERN = re.compile(
+    r"(\d+(?:\.\d+)?)\s*h(?:ours?)?\s*(before|after)\b", re.IGNORECASE
+)
+
+# A price level match is "close enough" if within this fraction of the
+# claimed value (formatting/rounding tolerance) -- never a wide enough band
+# to let a genuinely different level pass as the same one.
+_PRICE_TOLERANCE_FRACTION = 0.005
+_TIMING_TOLERANCE_HOURS = 0.5
+
+
+def _known_zone_prices(packet: EvidencePacket) -> set[float]:
+    sr = packet.support_resistance
+    prices: set[float] = set()
+    for zone in (
+        [sr.nearest_support, sr.nearest_resistance]
+        + list(sr.active_support_zones)
+        + list(sr.active_resistance_zones)
+        + list(sr.recent_broken_zones)
+    ):
+        if zone is not None:
+            prices.add(zone.representative_price)
+            prices.add(zone.lower_bound)
+            prices.add(zone.upper_bound)
+    return prices
+
+
+def _price_is_grounded(value: float, known: set[float]) -> bool:
+    if not known:
+        return False
+    tolerance = max(0.01, value * _PRICE_TOLERANCE_FRACTION)
+    return any(abs(value - k) <= tolerance for k in known)
+
+
+def check_typed_price_level_claims(brief: ResearchBrief, packet: EvidencePacket) -> list[GroundingViolation]:
+    """(#Phase 11.1 I) "$214.37 resistance" must match an actual
+    support/resistance zone's price -- not merely some unrelated grounded
+    number elsewhere in the packet (e.g. a sample count that happens to
+    coincide numerically)."""
+    known = _known_zone_prices(packet)
+    violations = []
+    for text in _all_text(brief):
+        for match in _PRICE_LEVEL_PATTERN.finditer(text):
+            raw = match.group(1) or match.group(2) or match.group(3)
+            value = float(raw)
+            if not _price_is_grounded(value, known):
+                violations.append(
+                    GroundingViolation(
+                        "unsupported_price_level",
+                        f"Price level {raw!r} in {text!r} does not match any support/resistance zone",
+                    )
+                )
+    return violations
+
+
+def check_typed_episode_claims(brief: ResearchBrief, packet: EvidencePacket) -> list[GroundingViolation]:
+    """(#Phase 11.1 I) "14 independent episodes"/"N raw samples" must match
+    the packet's own independence-adjusted counts exactly -- not just be
+    grounded to *some* number anywhere in the packet."""
+    research = packet.historical_research
+    violations = []
+    episode_count = (
+        research.independence.sample_composition.episode_count if research is not None else None
+    )
+    raw_count = research.independence.sample_composition.raw_count if research is not None else None
+
+    for text in _all_text(brief):
+        for match in _EPISODE_COUNT_PATTERN.finditer(text):
+            value = int(match.group(1))
+            if episode_count is None or value != episode_count:
+                violations.append(
+                    GroundingViolation(
+                        "unsupported_episode_count",
+                        f"Episode count {value} in {text!r} does not match packet's episode_count",
+                    )
+                )
+        for match in _RAW_SAMPLE_COUNT_PATTERN.finditer(text):
+            value = int(match.group(1))
+            if raw_count is None or value != raw_count:
+                violations.append(
+                    GroundingViolation(
+                        "unsupported_sample_count",
+                        f"Sample count {value} in {text!r} does not match packet's raw_count",
+                    )
+                )
+    return violations
+
+
+def check_typed_timing_claims(brief: ResearchBrief, packet: EvidencePacket) -> list[GroundingViolation]:
+    """(#Phase 11.1 I) "earnings occurred 18h before setup" must be
+    derivable (within a small tolerance) from the packet's own catalyst
+    timestamps -- an invented offset is rejected even if some other,
+    unrelated number in the packet happens to equal it."""
+    catalyst = packet.catalyst_context
+    nearest = catalyst.nearest_catalyst if catalyst is not None else None
+    violations = []
+    for text in _all_text(brief):
+        for match in _TIMING_PATTERN.finditer(text):
+            value = float(match.group(1))
+            direction = match.group(2).lower()
+            actual = (
+                nearest.hours_before_setup if direction == "before" else nearest.hours_after_setup
+            ) if nearest is not None else None
+            if actual is None or abs(value - actual) > _TIMING_TOLERANCE_HOURS:
+                violations.append(
+                    GroundingViolation(
+                        "unsupported_timing_claim",
+                        f"Timing claim '{value}h {direction}' in {text!r} is not derivable "
+                        "from catalyst timestamps",
+                    )
+                )
+    return violations
+
+
 def check_banned_language(brief: ResearchBrief) -> list[GroundingViolation]:
     violations = []
     for text in _all_text(brief):
@@ -214,6 +370,9 @@ def validate_research_brief(
     violations = (
         check_evidence_refs(brief, claims)
         + check_numeric_grounding(brief, packet, claims)
+        + check_typed_price_level_claims(brief, packet)
+        + check_typed_episode_claims(brief, packet)
+        + check_typed_timing_claims(brief, packet)
         + check_banned_language(brief)
     )
     return GroundingResult(is_valid=not violations, violations=violations)

@@ -158,6 +158,17 @@ export function formatSampleSizeLabel(label: string): string {
   return SAMPLE_SIZE_LABELS[label] ?? label;
 }
 
+const EVIDENCE_MATURITY_LABELS: Record<string, string> = {
+  insufficient: "INSUFFICIENT",
+  preliminary: "PRELIMINARY",
+  mixed: "MIXED",
+  replicated: "REPLICATED",
+};
+
+export function formatEvidenceMaturity(label: string): string {
+  return EVIDENCE_MATURITY_LABELS[label] ?? label;
+}
+
 export function formatSignedPercent(value: number | null, digits = 2): string {
   if (value === null) return "—";
   const sign = value > 0 ? "+" : "";

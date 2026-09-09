@@ -8,7 +8,8 @@ from __future__ import annotations
 import pytest
 
 from app.ai_analysis.claims import derive_evidence_claims
-from app.ai_analysis.evidence_packet import _market_snapshot_bundle, build_evidence_packet
+from app.ai_analysis.evidence_packet import build_evidence_packet
+from app.ai_analysis.market_snapshot import build_market_snapshot
 from app.ai_analysis.mock_provider import MockAIAnalysisProvider
 from app.ai_analysis.research_brief import AnalysisMode
 from app.ai_analysis.validation import validate_research_brief
@@ -26,7 +27,8 @@ def _as_of():
 
 def _setup_id():
     provider = FakeMarketDataProvider()
-    _f, _s, _l, snapshot = _market_snapshot_bundle("SPY", Timeframe.ONE_HOUR, provider, _as_of())
+    market_snapshot = build_market_snapshot("SPY", Timeframe.ONE_HOUR, provider, _as_of())
+    snapshot = market_snapshot.setup_snapshot
     pool = snapshot.qualified_setups + snapshot.candidates + snapshot.rejected_candidates
     return pool[0].id if pool else None
 

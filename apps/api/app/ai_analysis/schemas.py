@@ -14,10 +14,12 @@ phase silently reopening it.
 from __future__ import annotations
 
 from datetime import datetime
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, ConfigDict
 
+from app.ai_analysis.market_snapshot import MARKET_SNAPSHOT_PIPELINE_VERSION
 from app.api.routes.research_catalysts import CatalystResearchQueryResponse
 from app.api.routes.research_intelligence import AnalogQueryResponse
 from app.features.schemas import FeatureSnapshot
@@ -26,7 +28,18 @@ from app.news.schemas import CatalystEvent, SetupCatalystContext
 from app.setup_detection.schemas import SetupCandidate
 from app.support_resistance.schemas import SupportResistanceSnapshot
 
-EVIDENCE_PACKET_SCHEMA_VERSION = "1.0"
+EVIDENCE_PACKET_SCHEMA_VERSION = "1.1"
+
+
+class EvidenceMode(str, Enum):
+    """(Phase 11.1 #L) Caller intent, never inferred from clock proximity --
+    a packet built with an explicit `as_of` in the recent past is still
+    HISTORICAL_SNAPSHOT, because the caller asked "what did we know at
+    T," not "what do we know now." Never blurred: nothing downstream
+    should have to guess which one it got."""
+
+    LIVE = "live"
+    HISTORICAL_SNAPSHOT = "historical_snapshot"
 
 # ADR 0012's binding decision -- Phase 11 does not revisit it. Embedded on
 # every packet as a plain, non-computed constant so a downstream AI provider
@@ -83,12 +96,22 @@ class EvidencePacket(BaseModel):
 
     packet_id: str
     schema_version: str = EVIDENCE_PACKET_SCHEMA_VERSION
+    pipeline_version: str = MARKET_SNAPSHOT_PIPELINE_VERSION
+    mode: EvidenceMode
     as_of: datetime
     generated_at: datetime
     symbol: str
     timeframe: str
     session: Optional[str] = None
     current_price: Optional[float] = None
+
+    # (#D) Explicit cutoffs -- the latest instant each evidence category
+    # actually reflects. Never assumed equal to `as_of`: a component that
+    # could not truthfully reach back to `as_of` reports its real cutoff
+    # here rather than silently pretending full coverage.
+    market_data_cutoff: Optional[datetime] = None
+    news_cutoff: Optional[datetime] = None
+    research_snapshot_cutoff: Optional[datetime] = None
 
     setup: Optional[EvidenceSetupSection] = None
 

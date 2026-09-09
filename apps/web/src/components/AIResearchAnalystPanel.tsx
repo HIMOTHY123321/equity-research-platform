@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { EvidenceAuditTrail } from "@/components/EvidenceAuditTrail";
 import { ApiError, getEvidencePacket, postResearchBrief } from "@/lib/api";
 import type { AnalysisMode, EvidencePacket, ResearchBrief, SetupCandidate } from "@/lib/types";
 
@@ -166,21 +167,7 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
             <span className="text-[9px] text-muted">RANKING GATE: {packet?.ranking_gate_status}</span>
           </div>
 
-          {brief.evidence_refs.length > 0 && (
-            <p className="mt-1.5 flex flex-wrap gap-1 text-[9px] text-muted">
-              {brief.evidence_refs.map((ref) => (
-                <span key={ref} className="rounded bg-border px-1 py-0.5">
-                  {ref}
-                </span>
-              ))}
-            </p>
-          )}
-
-          {showPacket && packet && (
-            <pre className="mt-2 max-h-64 overflow-auto rounded border border-border bg-background p-2 text-[9px] text-muted">
-              {JSON.stringify(packet, null, 2)}
-            </pre>
-          )}
+          {showPacket && packet && <EvidenceAuditTrail packet={packet} brief={brief} />}
         </div>
       )}
     </div>

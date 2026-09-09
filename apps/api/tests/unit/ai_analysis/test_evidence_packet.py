@@ -8,11 +8,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from app.ai_analysis.evidence_packet import (
-    SetupNotFoundError,
-    _market_snapshot_bundle,
-    build_evidence_packet,
-)
+from app.ai_analysis.evidence_packet import SetupNotFoundError, build_evidence_packet
+from app.ai_analysis.market_snapshot import build_market_snapshot
 from app.news.fixture_provider import FixtureNewsProvider
 from app.schemas.market_data import Timeframe
 from tests.unit.ai_analysis.conftest import FakeMarketDataProvider, make_repositories, make_session
@@ -20,9 +17,8 @@ from tests.unit.ai_analysis.conftest import FakeMarketDataProvider, make_reposit
 
 def _some_candidate_id(as_of: datetime) -> str:
     provider = FakeMarketDataProvider()
-    _features, _structure, _levels, setup_snapshot = _market_snapshot_bundle(
-        "SPY", Timeframe.ONE_HOUR, provider, as_of
-    )
+    snapshot = build_market_snapshot("SPY", Timeframe.ONE_HOUR, provider, as_of)
+    setup_snapshot = snapshot.setup_snapshot
     pool = (
         setup_snapshot.qualified_setups + setup_snapshot.candidates + setup_snapshot.rejected_candidates
     )

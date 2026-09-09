@@ -1272,15 +1272,22 @@ export interface EvidenceProvenance {
   generated_at: string;
 }
 
+export type EvidenceModeKind = "live" | "historical_snapshot";
+
 export interface EvidencePacket {
   packet_id: string;
   schema_version: string;
+  pipeline_version: string;
+  mode: EvidenceModeKind;
   as_of: string;
   generated_at: string;
   symbol: string;
   timeframe: string;
   session: MarketSession | null;
   current_price: number | null;
+  market_data_cutoff: string | null;
+  news_cutoff: string | null;
+  research_snapshot_cutoff: string | null;
   setup: EvidenceSetupSection | null;
   structure: MarketStructureSnapshot;
   multi_timeframe_structure: Record<string, MarketStructureSnapshot>;
