@@ -65,9 +65,19 @@ def empty_client():
     app.dependency_overrides.clear()
 
 
+# Pinned to fall inside SPY_1H's own fixture range (2026-08-04 -- 2026-08-24)
+# so reaction/candle-adjacent assertions always have real surrounding
+# candles, regardless of how much real wall-clock time has passed since --
+# every route call below must pass this explicitly as `as_of` rather than
+# relying on the routes' own `as_of or datetime.now()` default, or the
+# default 30-day lookback window will silently drift the fixture articles
+# out of range as real time moves on.
+SEED_AS_OF = et(2026, 8, 20, 12, 0)
+
+
 @pytest.fixture
 def seeded_client():
-    now = et(2026, 8, 20, 12, 0)
+    now = SEED_AS_OF
     raw = [
         raw_article(
             "Acme reports quarterly earnings beat", now - timedelta(hours=2), ["SPY"], source="Reuters"
@@ -101,7 +111,7 @@ def test_get_symbol_news_empty_list_when_no_articles(empty_client):
 
 
 def test_get_symbol_news_returns_articles(seeded_client):
-    response = seeded_client.get("/api/news/SPY")
+    response = seeded_client.get("/api/news/SPY", params={"as_of": SEED_AS_OF.isoformat()})
     assert response.status_code == 200
     body = response.json()
     assert len(body) == 2
@@ -121,7 +131,7 @@ def test_get_symbol_news_provider_failure_degrades_to_empty_not_500(failing_clie
 
 
 def test_article_has_source_link_fields_never_embeds_full_body(seeded_client):
-    response = seeded_client.get("/api/news/SPY")
+    response = seeded_client.get("/api/news/SPY", params={"as_of": SEED_AS_OF.isoformat()})
     body = response.json()[0]
     assert "headline" in body
     assert "source" in body
@@ -136,7 +146,7 @@ def test_article_has_source_link_fields_never_embeds_full_body(seeded_client):
 
 
 def test_whats_moving_aggregates_across_symbols(seeded_client):
-    as_of = et(2026, 8, 20, 12, 0).isoformat()
+    as_of = SEED_AS_OF.isoformat()
     response = seeded_client.get(
         "/api/news/market/whats-moving", params={"symbols": "SPY,QQQ", "as_of": as_of, "days": 1}
     )
@@ -171,7 +181,7 @@ def test_get_symbol_catalysts_empty_list(empty_client):
 
 
 def test_get_symbol_catalysts_groups_into_events(seeded_client):
-    response = seeded_client.get("/api/catalysts/SPY")
+    response = seeded_client.get("/api/catalysts/SPY", params={"as_of": SEED_AS_OF.isoformat()})
     assert response.status_code == 200
     events = response.json()
     assert len(events) == 1
@@ -194,7 +204,7 @@ def test_get_catalyst_event_not_found_is_404(empty_client):
 
 
 def test_get_catalyst_event_detail_includes_articles(seeded_client):
-    events = seeded_client.get("/api/catalysts/SPY").json()
+    events = seeded_client.get("/api/catalysts/SPY", params={"as_of": SEED_AS_OF.isoformat()}).json()
     event_id = events[0]["event_id"]
     response = seeded_client.get(f"/api/catalysts/event/{event_id}")
     assert response.status_code == 200
@@ -211,7 +221,7 @@ def test_get_catalyst_reaction_not_found_event_is_404(empty_client):
 
 
 def test_get_catalyst_reaction_computes_and_returns(seeded_client):
-    events = seeded_client.get("/api/catalysts/SPY").json()
+    events = seeded_client.get("/api/catalysts/SPY", params={"as_of": SEED_AS_OF.isoformat()}).json()
     event_id = events[0]["event_id"]
     response = seeded_client.get(
         f"/api/catalysts/event/{event_id}/reaction", params={"symbol": "SPY", "timeframe": "1h"}

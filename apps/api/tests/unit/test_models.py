@@ -29,6 +29,10 @@ EXPECTED_TABLES = {
     "catalyst_reactions",
     "evidence_packets",
     "research_briefs",
+    "forward_forecasts",
+    "forecast_outcomes",
+    "forward_validation_gate_versions",
+    "forward_validation_gate_results",
 }
 
 

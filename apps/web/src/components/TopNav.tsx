@@ -17,6 +17,9 @@ export function TopNav() {
           <Link href="/research" className="hover:text-foreground">
             Research Lab
           </Link>
+          <Link href="/forecasts" className="hover:text-foreground">
+            Forecast Lab
+          </Link>
           <span className="cursor-default">Reports</span>
           <span className="cursor-default">Watchlist</span>
         </nav>

@@ -1326,3 +1326,134 @@ export interface ResearchBrief {
   grounding_rejected: boolean;
   grounding_violations: string[];
 }
+
+// ---- Forward Prediction Benchmark & Validation Lab (Phase 12) -------------
+//
+// A ForwardForecast is a locked, machine-evaluable hypothesis bound to a
+// frozen EvidencePacket -- never a price target, never a probability,
+// never BUY/SELL. `run_mode: "prospective"` is what a real forecast made
+// through the app is always tagged; "backtest_replay" only ever appears on
+// internal/test data and is excluded from the Forward Validation Gate.
+
+export type ForecastCategoryKind = "direction" | "structure" | "volatility" | "catalyst_reaction" | "setup_outcome";
+
+export type EvidenceQualityStateKind = "high_evidence_support" | "mixed_evidence" | "weak_evidence" | "insufficient_evidence";
+
+export type AbstentionReasonKind =
+  | "too_few_purged_episodes"
+  | "high_overlap"
+  | "unstable_evidence"
+  | "contradictory_research"
+  | "insufficient_historical_analogs"
+  | "stale_data"
+  | "provider_limitation"
+  | "catalyst_ambiguity"
+  | "ranking_gate_restriction";
+
+export type ForecastOriginKind = "deterministic_research" | "ai_synthesis";
+
+export type ForecastStatusKind = "active" | "resolved" | "abstained" | "invalidated";
+
+export type ForecastRunModeKind = "prospective" | "backtest_replay";
+
+export type ForecastOutcomeCategoryKind = "correct" | "incorrect" | "neutral_unresolved" | "invalidated" | "insufficient_future_data";
+
+export interface ForwardForecast {
+  forecast_id: string;
+  schema_version: string;
+  created_at: string;
+  market_as_of: string;
+  symbol: string;
+  timeframe: string;
+
+  forecast_category: ForecastCategoryKind;
+  forecast_value: string | null;
+  forecast_horizon_bars: number;
+  zone_ref: string | null;
+
+  setup_type: string | null;
+  catalyst_category: string | null;
+
+  evidence_packet_id: string;
+  evidence_packet_schema_version: string;
+  pipeline_version: string;
+  evidence_refs: string[];
+  evidence_quality: EvidenceQualityStateKind;
+
+  origin: ForecastOriginKind;
+  provider: string | null;
+  model: string | null;
+  prompt_version: string | null;
+
+  status: ForecastStatusKind;
+  abstention_reason: AbstentionReasonKind | null;
+  rationale: string;
+  run_mode: ForecastRunModeKind;
+}
+
+export interface ForecastOutcome {
+  outcome_id: string;
+  forecast_id: string;
+  resolved_at: string;
+  resolution_as_of: string;
+  outcome: ForecastOutcomeCategoryKind;
+  actual_value: string | null;
+  actual_forward_return_percent: number | null;
+  actual_mfe_atr: number | null;
+  actual_mae_atr: number | null;
+  market_data_cutoff: string | null;
+  detail: string;
+}
+
+export interface ForecastPerformanceBreakdown {
+  group: string;
+  forecast_count: number;
+  active_count: number;
+  resolved_count: number;
+  abstained_count: number;
+  correct_count: number;
+  incorrect_count: number;
+  neutral_count: number;
+  directional_accuracy: number | null;
+  average_forward_return_percent: number | null;
+  average_mfe_atr: number | null;
+  average_mae_atr: number | null;
+  coverage_rate: number | null;
+  abstention_rate: number | null;
+}
+
+export interface ForecastBaselineResult {
+  name: string;
+  accuracy: number | null;
+  sample_size: number;
+}
+
+export interface ForecastPerformanceResponse {
+  overall: ForecastPerformanceBreakdown;
+  by_symbol: ForecastPerformanceBreakdown[];
+  by_timeframe: ForecastPerformanceBreakdown[];
+  by_setup_type: ForecastPerformanceBreakdown[];
+  by_catalyst_category: ForecastPerformanceBreakdown[];
+  by_evidence_quality: ForecastPerformanceBreakdown[];
+  by_origin: ForecastPerformanceBreakdown[];
+  by_horizon: ForecastPerformanceBreakdown[];
+  baselines: ForecastBaselineResult[];
+}
+
+export type ForwardValidationGateDecisionKind = "not_enough_data" | "fail" | "promising" | "pass";
+
+export interface ForwardValidationGateEvaluation {
+  gate_version: string;
+  decision: ForwardValidationGateDecisionKind;
+  reasons: string[];
+  forecast_count: number;
+  resolved_count: number;
+  independent_episode_estimate: number;
+  accuracy: number | null;
+  best_baseline_accuracy: number | null;
+  best_baseline_name: string | null;
+  abstention_rate: number | null;
+  max_symbol_share: number | null;
+  max_time_bucket_share: number | null;
+  criteria: Record<string, number>;
+}

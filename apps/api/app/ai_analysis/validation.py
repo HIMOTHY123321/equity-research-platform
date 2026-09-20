@@ -64,6 +64,11 @@ _BANNED_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("probability_claim", re.compile(r"\d+(?:\.\d+)?\s*%\s*chance", re.IGNORECASE)),
     ("probability_claim_alt", re.compile(r"\bprobability\s+of\b", re.IGNORECASE)),
     ("win_rate_claim", re.compile(r"\d+(?:\.\d+)?\s*%\s*win\s*rate", re.IGNORECASE)),
+    # (Phase 12 #E) "NN% confident"/"NN% confidence" is a probability claim
+    # by another name -- banned the same way "NN% chance" already is. Not a
+    # bare ban on the word "confidence" (legitimate elsewhere, e.g. bootstrap
+    # confidence intervals): only the percent-prefixed claim form matches.
+    ("confidence_claim", re.compile(r"\d+(?:\.\d+)?\s*%\s*confiden", re.IGNORECASE)),
     ("certainty_claim", re.compile(r"\bguarantee[ds]?\b", re.IGNORECASE)),
     ("certainty_claim_alt", re.compile(r"\bsure\s+thing\b", re.IGNORECASE)),
     # (Phase 11.1 #J) Defense in depth: a brief's own text should never

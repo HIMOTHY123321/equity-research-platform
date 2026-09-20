@@ -105,7 +105,7 @@ npm run build
 
 ## Status
 
-Phases 1-11 are complete. Phases 1-5 built the market data engine, the
+Phases 1-12 are complete. Phases 1-5 built the market data engine, the
 deterministic feature/market-structure/support-resistance engines (`GET
 /api/market/{symbol}/{features,structure,levels}`), all under the same
 `as_of`/no-lookahead discipline the rest of the pipeline reuses. Phase 6
@@ -149,9 +149,25 @@ numbers, unknown evidence citations, and any BUY/SELL/probability language,
 falling back to a deterministic-only brief whenever validation fails or no
 provider is configured (`/api/analysis/*`, an "AI Research Analyst" panel on
 every setup card). RANKING GATE remains **FAIL**; nothing in Phase 11
-computes a score, rank, or recommendation. `scoring/`, `risk_reward/`,
-`backtesting/`, and `reporting/` remain unimplemented placeholder packages;
-see `docs/decisions/` and commit history for what's landed phase by phase.
+computes a score, rank, or recommendation. Phase 11.1 (ADR 0015) closed a
+point-in-time integrity gap in the EvidencePacket's market-data sourcing (a
+historical `as_of` now genuinely reconstructs what the platform knew at
+that instant, proven by adversarial append-future/replay-parity tests) and
+hardened the AI-brief grounding validator and audit trail UI.
+
+Phase 12 (ADR 0016) added a Forward Prediction Benchmark & Validation Lab
+(`app/forecasting/`, `/api/forecasts/*`, a Forecast Lab UI): an immutable,
+timestamped `ForwardForecast` ledger locked against a frozen EvidencePacket,
+a resolver that is the only place future data may enter, honest baselines
+and per-group metrics, and a separate Forward Validation Gate (currently
+**NOT ENOUGH DATA** — no prospective results exist yet) that is distinct
+from, and never a replacement for, the Phase 9 RANKING GATE (still
+**FAIL**). No probabilities, no BUY/SELL, no price targets, no brokerage
+connection — see ADR 0016 for the full rationale, including why a
+prospective forecast is not interchangeable with a backtest.
+`scoring/`, `risk_reward/`, `backtesting/`, and `reporting/` remain
+unimplemented placeholder packages; see `docs/decisions/` and commit
+history for what's landed phase by phase.
 
 ## Development rules this project follows
 

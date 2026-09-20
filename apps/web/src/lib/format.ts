@@ -134,6 +134,32 @@ export function formatLifecycleState(state: string): string {
   return LIFECYCLE_STATE_LABELS[state] ?? state;
 }
 
+// ---- Phase 12 (#A/#L): exchange-timezone timestamps, full precision -----
+//
+// US-equities default: `YYYY-MM-DD HH:mm:ss EST/EDT` in America/New_York,
+// always to the second, never a bare relative/current-time label for a
+// historical candle or forecast. Used anywhere a forecast's created_at/
+// market_as_of/resolution timestamp, or a chart candle's timestamp, is
+// shown -- one formatter, so every surface renders identically.
+const _EXCHANGE_TZ_PARTS = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  hour12: false,
+  timeZoneName: "short",
+});
+
+export function formatExchangeTimestamp(iso: string | null): string {
+  if (!iso) return "—";
+  const parts = _EXCHANGE_TZ_PARTS.formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")} ${get("hour")}:${get("minute")}:${get("second")} ${get("timeZoneName")}`;
+}
+
 export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
 }
@@ -247,6 +273,46 @@ export function formatHoursAgo(hours: number | null): string {
 
 export function formatSourceCount(count: number): string {
   return `${count} source${count === 1 ? "" : "s"}`;
+}
+
+// ---- Forward Prediction Benchmark & Validation Lab (Phase 12) -------------
+
+/** Generic snake_case -> Title Case for the Phase 12 closed enums -- every
+ * forecast_value/category/reason is already a fixed, typed vocabulary, so a
+ * single mechanical formatter (no per-value label table) is honest and
+ * sufficient; it never has to "interpret" anything. */
+export function formatEnumLabel(value: string | null): string {
+  if (!value) return "—";
+  return value
+    .split("_")
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(" ");
+}
+
+export function forecastStatusColorClass(status: string): string {
+  if (status === "active") return "text-accent";
+  if (status === "abstained") return "text-muted";
+  if (status === "invalidated") return "text-negative";
+  return "text-foreground";
+}
+
+export function forecastOutcomeColorClass(outcome: string): string {
+  if (outcome === "correct") return "text-positive";
+  if (outcome === "incorrect") return "text-negative";
+  return "text-muted";
+}
+
+export function evidenceQualityColorClass(quality: string): string {
+  if (quality === "high_evidence_support") return "text-positive";
+  if (quality === "mixed_evidence") return "text-amber-600 dark:text-amber-400";
+  return "text-muted";
+}
+
+export function gateDecisionColorClass(decision: string): string {
+  if (decision === "pass") return "text-positive";
+  if (decision === "promising") return "text-amber-600 dark:text-amber-400";
+  if (decision === "fail") return "text-negative";
+  return "text-muted";
 }
 
 // ---- Catalyst Research Lab evidence-state messaging (Phase 10.1 #C) -------

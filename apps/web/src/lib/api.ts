@@ -7,6 +7,12 @@ import type {
   CatalystResearchQueryResponse,
   EvidencePacket,
   FeatureSnapshot,
+  ForecastCategoryKind,
+  ForecastOriginKind,
+  ForecastOutcome,
+  ForecastPerformanceResponse,
+  ForwardForecast,
+  ForwardValidationGateEvaluation,
   LedgerEntriesResponse,
   MarketReaction,
   MarketStructureSnapshot,
@@ -346,4 +352,62 @@ export function postResearchBrief(params: ResearchBriefParams): Promise<Research
 
 export function getResearchBrief(symbol: string, briefId: string): Promise<ResearchBrief> {
   return request<ResearchBrief>(`/api/analysis/${symbol}/brief/${briefId}`);
+}
+
+// ---- Forward Prediction Benchmark & Validation Lab (Phase 12) -------------
+//
+// `postForecast` never accepts a market_as_of -- the same structural
+// no-backfill guarantee app.forecasting.service.create_forecast documents
+// on the backend: a prospective forecast made through this client can only
+// ever be bound to "right now."
+
+export interface CreateForecastParams {
+  symbol: string;
+  timeframe: Timeframe;
+  forecastCategory: ForecastCategoryKind;
+  horizonBars: number;
+  setupId?: string;
+  origin?: ForecastOriginKind;
+}
+
+export function postForecast(params: CreateForecastParams): Promise<ForwardForecast> {
+  return request<ForwardForecast>(`/api/forecasts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      symbol: params.symbol,
+      timeframe: params.timeframe,
+      forecast_category: params.forecastCategory,
+      horizon_bars: params.horizonBars,
+      setup_id: params.setupId ?? null,
+      origin: params.origin ?? "deterministic_research",
+    }),
+  });
+}
+
+export function listForecasts(params: { symbol?: string; timeframe?: string; status?: string; limit?: number } = {}): Promise<ForwardForecast[]> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.status) query.set("status", params.status);
+  query.set("limit", String(params.limit ?? 200));
+  return request<ForwardForecast[]>(`/api/forecasts?${query}`);
+}
+
+export function getForecast(forecastId: string): Promise<ForwardForecast> {
+  return request<ForwardForecast>(`/api/forecasts/${forecastId}`);
+}
+
+export function resolveForecast(forecastId: string): Promise<ForecastOutcome> {
+  return request<ForecastOutcome>(`/api/forecasts/${forecastId}/resolve`, { method: "POST" });
+}
+
+export function getForecastPerformance(symbol?: string): Promise<ForecastPerformanceResponse> {
+  const query = new URLSearchParams();
+  if (symbol) query.set("symbol", symbol);
+  return request<ForecastPerformanceResponse>(`/api/forecasts/performance?${query}`);
+}
+
+export function getForecastGate(): Promise<ForwardValidationGateEvaluation> {
+  return request<ForwardValidationGateEvaluation>(`/api/forecasts/gate`);
 }

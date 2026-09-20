@@ -667,3 +667,83 @@ class ResearchBriefRecord(Base):
     as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 12: Forward Prediction Benchmark & Validation Lab. All four tables
+# are immutable-snapshot rows, same convention as every table since Phase 7
+# -- a forecast/outcome/gate-result is never updated in place; a correction
+# is always a new row. `forecast_id`/`outcome_id` are deterministic
+# content-derived business keys (idempotent creation, same convention as
+# `article_id`/`packet_id`); the repository additionally refuses to ever
+# UPDATE an existing forecast row (#F "forecast cannot be edited").
+# ---------------------------------------------------------------------------
+
+
+class ForwardForecastRecord(Base):
+    """One immutable, locked forecast (#F). `payload` is the full
+    ForwardForecast Pydantic dump; the columns below are only what's
+    queried on directly for ledger/performance breakdowns."""
+
+    __tablename__ = "forward_forecasts"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    forecast_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    schema_version: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    market_as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8), index=True)
+    forecast_category: Mapped[str] = mapped_column(String(32), index=True)
+    forecast_value: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    forecast_horizon_bars: Mapped[int] = mapped_column(Integer)
+    evidence_packet_id: Mapped[str] = mapped_column(String(64), index=True)
+    origin: Mapped[str] = mapped_column(String(32), index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    run_mode: Mapped[str] = mapped_column(String(16), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ForecastOutcomeRecord(Base):
+    """One immutable outcome resolution (#G), linked to its forecast by the
+    business key `forecast_id` -- never a mutation of the forecast row."""
+
+    __tablename__ = "forecast_outcomes"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    outcome_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    forecast_id: Mapped[str] = mapped_column(String(64), index=True)
+    outcome: Mapped[str] = mapped_column(String(32), index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ForwardValidationGateVersionRecord(Base):
+    """(#P) A versioned, immutable gate-criteria definition. Changing
+    criteria always means a new `gate_version` row -- an existing version's
+    criteria are never edited, so a past PASS/FAIL decision always stays
+    interpretable against the exact rules that produced it."""
+
+    __tablename__ = "forward_validation_gate_versions"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    gate_version: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    criteria: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ForwardValidationGateResultRecord(Base):
+    """(#O/#P) One immutable evaluation run of a gate version against
+    whatever forecasts/outcomes existed at `evaluated_at` -- re-running the
+    gate later is always a new row, never an overwrite of a past result."""
+
+    __tablename__ = "forward_validation_gate_results"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    gate_version: Mapped[str] = mapped_column(String(32), index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    decision: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

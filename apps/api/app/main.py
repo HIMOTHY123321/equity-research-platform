@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.api.routes import (
     analysis,
+    forecasts,
     market,
     news,
     research,
@@ -45,6 +46,7 @@ app.include_router(news.news_router)
 app.include_router(news.catalyst_router)
 app.include_router(research_catalysts.router)
 app.include_router(analysis.router)
+app.include_router(forecasts.router)
 
 
 @app.exception_handler(AuthenticationError)

@@ -13,13 +13,14 @@ import {
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 
-import { swingClassificationAbbrev } from "@/lib/format";
+import { formatExchangeTimestamp, swingClassificationAbbrev } from "@/lib/format";
 import type {
   BreakOfStructureEvent,
   Candle,
   ChangeOfCharacterEvent,
+  ForwardForecast,
   SetupCandidate,
   SwingPoint,
   Zone,
@@ -29,6 +30,7 @@ const RESISTANCE_COLOR = "#ef4444";
 const SUPPORT_COLOR = "#22c55e";
 const CHOCH_COLOR = "#eab308";
 const SETUP_COLOR = "#a78bfa";
+const FORECAST_COLOR = "#38bdf8";
 const MAX_ZONES_DRAWN = 6;
 const MAX_SETUP_MARKERS_DRAWN = 8;
 // Uncapped defaults for structural pivots would draw one marker per
@@ -99,12 +101,14 @@ export function CandlestickChart({
   structure,
   zones,
   setups,
+  forecasts,
   display = DEFAULT_CHART_DISPLAY_OPTIONS,
 }: {
   candles: Candle[];
   structure?: StructureOverlay;
   zones?: ZoneOverlay;
   setups?: SetupCandidate[];
+  forecasts?: ForwardForecast[];
   display?: ChartDisplayOptions;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -112,6 +116,15 @@ export function CandlestickChart({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const markersApiRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
   const priceLinesRef = useRef<IPriceLine[]>([]);
+  const candlesRef = useRef<Candle[]>(candles);
+  useEffect(() => {
+    candlesRef.current = candles;
+  }, [candles]);
+  // Crosshair-hover readout (#L): the x-axis itself stays uncluttered
+  // (lightweight-charts' own abbreviated tick labels); the full
+  // `YYYY-MM-DD HH:mm:ss EST/EDT` timestamp only ever appears here, on
+  // hover/selection -- never as a current-time label for a historical bar.
+  const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -146,7 +159,19 @@ export function CandlestickChart({
     seriesRef.current = series;
     markersApiRef.current = createSeriesMarkers(series, []);
 
+    const handleCrosshairMove = (param: { time?: Time }) => {
+      if (param.time === undefined) {
+        setHoveredTimestamp(null);
+        return;
+      }
+      const seconds = param.time as number;
+      const candle = candlesRef.current.find((c) => Math.floor(new Date(c.timestamp).getTime() / 1000) === seconds);
+      setHoveredTimestamp(candle?.timestamp ?? null);
+    };
+    chart.subscribeCrosshairMove(handleCrosshairMove);
+
     return () => {
+      chart.unsubscribeCrosshairMove(handleCrosshairMove);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -244,9 +269,23 @@ export function CandlestickChart({
       }
     }
 
+    // Phase 12 (#L): forecast markers at `market_as_of` -- the instant the
+    // forecast was locked, never `created_at`/a current-time label. Full
+    // created_at/market_as_of/resolution timestamps are surfaced via the
+    // crosshair-hover readout below, not printed on the marker itself.
+    for (const forecast of forecasts ?? []) {
+      markers.push({
+        time: toUtcTimestamp(forecast.market_as_of),
+        position: "inBar",
+        shape: forecast.status === "abstained" ? "circle" : "square",
+        color: FORECAST_COLOR,
+        text: forecast.status === "abstained" ? "ABSTAIN" : "FCST",
+      });
+    }
+
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     markersApi.setMarkers(markers);
-  }, [structure, setups, display]);
+  }, [structure, setups, forecasts, display]);
 
   useEffect(() => {
     const series = seriesRef.current;
@@ -295,5 +334,14 @@ export function CandlestickChart({
     }
   }, [zones, display]);
 
-  return <div ref={containerRef} className="h-full w-full" />;
+  return (
+    <div className="relative h-full w-full">
+      <div ref={containerRef} className="h-full w-full" />
+      {hoveredTimestamp && (
+        <div className="pointer-events-none absolute left-2 top-2 rounded border border-border bg-surface/90 px-2 py-1 font-mono text-[11px] text-foreground">
+          {formatExchangeTimestamp(hoveredTimestamp)}
+        </div>
+      )}
+    </div>
+  );
 }
