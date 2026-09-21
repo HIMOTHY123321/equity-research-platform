@@ -2,7 +2,7 @@ import pandas as pd
 import pytest
 from yfinance.exceptions import YFRateLimitError
 
-from app.market_data.exceptions import InvalidSymbolError, ProviderError, RateLimitError
+from app.market_data.exceptions import ProviderError, RateLimitError
 from app.market_data.yfinance_provider import YFinanceMarketDataProvider
 from app.schemas.market_data import Timeframe
 from tests.conftest import utc
@@ -101,31 +101,51 @@ def test_empty_response_returns_empty_list_without_fabricating():
     assert candles == []
 
 
-def test_get_latest_quote_is_marked_approximate():
-    ticker = FakeTicker(fast_info={"last_price": 555.5})
+def test_get_latest_quote_uses_the_real_latest_bars_price_and_timestamp():
+    # Hardening pass: get_latest_quote no longer fabricates `timestamp` as
+    # "now" -- both price and timestamp come from the same real bar, so a
+    # caller can never see a price that doesn't match its claimed time.
+    bars = [BAR_ROW, (utc(2026, 8, 17, 14, 35), 100.5, 102, 100, 101.25, 900)]
+    ticker = FakeTicker(history_df=_df(bars))
     provider = _provider(ticker)
 
     quote = provider.get_latest_quote("SPY")
 
-    assert quote.bid_price == pytest.approx(555.5)
-    assert quote.ask_price == pytest.approx(555.5)
+    assert quote.bid_price == pytest.approx(101.25)
+    assert quote.ask_price == pytest.approx(101.25)
+    assert quote.timestamp == bars[-1][0]
     assert quote.is_approximate is True
 
 
-def test_get_latest_quote_missing_price_raises_invalid_symbol():
-    ticker = FakeTicker(fast_info={"last_price": None})
+def test_get_latest_quote_raises_provider_error_when_nothing_published_yet():
+    ticker = FakeTicker(history_df=_df([]))
     provider = _provider(ticker)
 
-    with pytest.raises(InvalidSymbolError):
+    with pytest.raises(ProviderError):
         provider.get_latest_quote("ZZZZINVALID")
 
 
-def test_get_latest_quote_exception_raises_invalid_symbol():
-    ticker = FakeTicker(raise_on_fast_info=KeyError("currentTradingPeriod"))
+def test_get_latest_quote_propagates_provider_error_after_retries_exhausted():
+    ticker = FakeTicker(raise_on_history=ConnectionError("network down"))
     provider = _provider(ticker, max_retries=0)
 
-    with pytest.raises(InvalidSymbolError):
+    with pytest.raises(ProviderError):
         provider.get_latest_quote("ZZZZINVALID")
+
+
+def test_repeated_polls_against_unchanged_yahoo_data_never_fabricate_a_newer_timestamp():
+    # Hardening pass regression: two polls against a data source that
+    # genuinely hasn't advanced must return the exact same timestamp -- the
+    # old self._now()-based implementation would have returned a "newer"
+    # timestamp on every single call regardless of whether Yahoo's
+    # underlying bar had actually changed.
+    ticker = FakeTicker(history_df=_df([BAR_ROW]))
+    provider = _provider(ticker)
+
+    first = provider.get_latest_quote("SPY")
+    second = provider.get_latest_quote("SPY")
+
+    assert first.timestamp == second.timestamp == BAR_ROW[0]
 
 
 def test_get_previous_close_skips_todays_incomplete_bar():

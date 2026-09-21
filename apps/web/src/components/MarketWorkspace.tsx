@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { CandlestickChart, DEFAULT_CHART_DISPLAY_OPTIONS, type ChartDisplayOptions } from "@/components/CandlestickChart";
 import { FeaturePanel } from "@/components/FeaturePanel";
+import { RangeSelector } from "@/components/RangeSelector";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
 import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
@@ -21,6 +22,7 @@ import {
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
+import { DEFAULT_RANGE, limitForRange, type ChartRange } from "@/lib/chartRanges";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -33,13 +35,14 @@ import type { Timeframe } from "@/lib/types";
 export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
   const [symbol, setSymbol] = useState(defaultSymbol);
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+  const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
 
   function toggleDisplay(key: keyof ChartDisplayOptions) {
     setDisplay((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  const candlesQuery = useCandles(symbol, timeframe);
+  const candlesQuery = useCandles(symbol, timeframe, limitForRange(range, timeframe));
   const featuresQuery = useFeatures(symbol, timeframe);
   const structureQuery = useStructure(symbol, timeframe);
   const levelsQuery = useLevels(symbol, timeframe);
@@ -89,6 +92,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                   </button>
                 ))}
               </div>
+              <RangeSelector value={range} onChange={setRange} />
               <TimeframeSelector value={timeframe} onChange={setTimeframe} />
             </div>
           </div>
@@ -135,6 +139,8 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                 }
                 liveCandle={liveCandles[timeframe] ?? null}
                 display={display}
+                symbol={symbol}
+                timeframe={timeframe}
               />
             )}
           </div>

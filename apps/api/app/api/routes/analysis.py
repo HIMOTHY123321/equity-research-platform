@@ -16,6 +16,7 @@ from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.ai_analysis.brief import generate_research_brief
@@ -35,6 +36,24 @@ from app.research.repository import SqlAlchemyResearchRepository
 router = APIRouter(prefix="/api/analysis", tags=["ai-analysis"])
 
 
+class BriefListItemOut(BaseModel):
+    """Hardening pass (§19): the Reports page's list-row shape --
+    everything needed to render/link a saved report without fetching its
+    full body. See app.ai_analysis.repository.BriefListItem."""
+
+    brief_id: str
+    evidence_packet_id: str
+    symbol: str
+    timeframe: str
+    setup_id: Optional[str]
+    mode: str
+    provider: str
+    model: Optional[str]
+    prompt_version: str
+    generated_at: datetime
+    as_of: datetime
+
+
 def _news_repository(db: Session = Depends(get_db)) -> SqlAlchemyNewsRepository:
     return SqlAlchemyNewsRepository(db)
 
@@ -45,6 +64,34 @@ def _research_repository(db: Session = Depends(get_db)) -> SqlAlchemyResearchRep
 
 def _evidence_repository(db: Session = Depends(get_db)) -> SqlAlchemyEvidenceRepository:
     return SqlAlchemyEvidenceRepository(db)
+
+
+@router.get("/briefs", response_model=list[BriefListItemOut])
+def list_recent_briefs(
+    limit: int = Query(100, ge=1, le=500),
+    evidence_repository: SqlAlchemyEvidenceRepository = Depends(_evidence_repository),
+) -> list[BriefListItemOut]:
+    """Hardening pass (§19): backs the Reports page. Every saved report
+    stays bound to its original frozen EvidencePacket -- this only lists
+    what's already persisted, never regenerates anything from current
+    market state."""
+    items = evidence_repository.list_recent_briefs(limit=limit)
+    return [
+        BriefListItemOut(
+            brief_id=item.brief_id,
+            evidence_packet_id=item.evidence_packet_id,
+            symbol=item.symbol,
+            timeframe=item.timeframe,
+            setup_id=item.setup_id,
+            mode=item.mode,
+            provider=item.provider,
+            model=item.model,
+            prompt_version=item.prompt_version,
+            generated_at=item.generated_at,
+            as_of=item.as_of,
+        )
+        for item in items
+    ]
 
 
 @router.get("/{symbol}/evidence", response_model=EvidencePacket)
@@ -126,3 +173,21 @@ def get_research_brief(
     if brief is None:
         raise HTTPException(status_code=404, detail=f"Research brief {brief_id!r} not found")
     return brief
+
+
+@router.get("/{symbol}/evidence/{packet_id}", response_model=EvidencePacket)
+def get_saved_evidence_packet(
+    symbol: str,
+    packet_id: str,
+    evidence_repository: SqlAlchemyEvidenceRepository = Depends(_evidence_repository),
+) -> EvidencePacket:
+    """Hardening pass (§19): the Reports page's detail view fetches the
+    EvidencePacket a saved brief is bound to by id -- distinct from
+    `GET /{symbol}/evidence` above, which always builds a *fresh* packet
+    from current market state. A saved report's evidence must never be
+    regenerated; this only ever returns what was actually frozen."""
+    _validated_symbol(symbol)
+    packet = evidence_repository.get_packet(packet_id)
+    if packet is None:
+        raise HTTPException(status_code=404, detail=f"Evidence packet {packet_id!r} not found")
+    return packet

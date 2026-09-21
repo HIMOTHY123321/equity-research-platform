@@ -33,7 +33,7 @@ from yfinance.exceptions import YFException, YFRateLimitError
 
 from app.market_data.aggregation import aggregate_hourly_to_4h
 from app.market_data.capabilities import YFINANCE_CAPABILITIES, ProviderCapabilities
-from app.market_data.exceptions import InvalidSymbolError, ProviderError, RateLimitError
+from app.market_data.exceptions import ProviderError, RateLimitError
 from app.market_data.normalization import normalize_yfinance_bars
 from app.market_data.provider import MarketDataProvider
 from app.market_data.sessions import classify_timestamp_session, exchange_trading_date
@@ -88,15 +88,25 @@ class YFinanceMarketDataProvider(MarketDataProvider):
         return self._fetch_bars(symbol, timeframe, limit)
 
     def get_latest_quote(self, symbol: str) -> Quote:
-        price = self._fast_info_price(symbol)
-        timestamp = self._now()
+        """Hardening pass: `timestamp` used to be `self._now()` -- the
+        moment *we polled*, not any real market event. That fabricated a
+        quote that always looked "just now" fresh even when Yahoo's
+        underlying data hadn't actually moved in minutes (the "LIVE <1s
+        ago" bug, and the reason a genuinely-new forming candle bucket
+        never appeared: LiveMarketService's dedup-on-timestamp had nothing
+        to dedup against). `price` and `timestamp` now both come from the
+        same real, most-recent intraday bar Yahoo has actually published --
+        an honest, internally-consistent pair. This trades update
+        granularity (at best every 5 minutes, matching Yahoo's own free
+        intraday resolution) for truthfulness, which is the point."""
+        bar = self._latest_intraday_bar(symbol)
         return Quote(
             symbol=symbol,
-            timestamp=timestamp,
-            session=classify_timestamp_session(timestamp),
-            bid_price=price,
+            timestamp=bar.timestamp,
+            session=classify_timestamp_session(bar.timestamp),
+            bid_price=bar.close,
             bid_size=0.0,
-            ask_price=price,
+            ask_price=bar.close,
             ask_size=0.0,
             is_approximate=True,
         )
@@ -141,6 +151,22 @@ class YFinanceMarketDataProvider(MarketDataProvider):
 
         return result.candles[-limit:]
 
+    def _latest_intraday_bar(self, symbol: str) -> Candle:
+        """The real, most-recently-published 5-minute bar -- a light
+        `period="1d"` fetch (today's session only, ~78 rows at most), never
+        the heavy 60-day history `_fetch_bars` requests for chart data.
+        Raises ProviderError if Yahoo has published nothing for today yet
+        (e.g. immediately after market open, or a fully closed session) --
+        callers must not fabricate a bar to fill that gap."""
+        df = self._history(symbol, period="1d", interval="5m")
+        rows = ((ts.to_pydatetime(), row) for ts, row in df.iterrows())
+        result = normalize_yfinance_bars(rows, symbol, Timeframe.FIVE_MIN)
+        for rejected in result.rejected:
+            logger.warning("Rejected malformed live 5m bar for %s: %s", symbol, rejected.reason)
+        if not result.candles:
+            raise ProviderError(f"No intraday bar available yet for {symbol}")
+        return result.candles[-1]
+
     def _history(self, symbol: str, period: str, interval: str):
         attempt = 0
         while True:
@@ -160,28 +186,6 @@ class YFinanceMarketDataProvider(MarketDataProvider):
                 if attempt > self._max_retries:
                     raise ProviderError(f"Unexpected error fetching {symbol} from yfinance: {exc}") from exc
                 self._sleep(_backoff_seconds(attempt))
-
-    def _fast_info_price(self, symbol: str) -> float:
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                ticker = self._ticker_factory(symbol)
-                price = ticker.fast_info["last_price"]
-                if price is None:
-                    raise InvalidSymbolError(symbol)
-                return price
-            except InvalidSymbolError:
-                raise
-            except YFRateLimitError as exc:
-                if attempt > self._max_retries:
-                    raise RateLimitError(f"yfinance rate limited fetching quote for {symbol}") from exc
-                self._sleep(_backoff_seconds(attempt))
-            except Exception as exc:
-                if attempt > self._max_retries:
-                    raise InvalidSymbolError(symbol) from exc
-                self._sleep(_backoff_seconds(attempt))
-
 
 def _backoff_seconds(attempt: int) -> float:
     return min(2 ** (attempt - 1) * 0.5, 4.0)

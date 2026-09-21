@@ -209,6 +209,38 @@ async def live_stream(websocket: WebSocket) -> None:
                     if news_monitor is not None:
                         news_monitor.subscribe(message.symbol)
                     subscribed_symbols.add(message.symbol)
+                    # Hardening pass regression fix, same shape as the
+                    # Phase 12.1 connection_status snapshot-on-connect fix:
+                    # quote/forming_candle events are only ever published on
+                    # a genuine *new* observation (correctly, post-hardening
+                    # -- see LiveMarketService's dedup). Before that fix,
+                    # yfinance's fabricated now() timestamp meant a "new"
+                    # quote arrived on nearly every poll, which accidentally
+                    # papered over the real gap: a freshly-subscribing
+                    # connection otherwise never learns state that was
+                    # already known *before* it subscribed, sometimes for
+                    # minutes (yfinance's real polling floor). Send an
+                    # explicit snapshot of whatever this service already
+                    # knows, directly to this connection only.
+                    existing_quote = live_service.latest_quote(message.symbol)
+                    if existing_quote is not None:
+                        outbound.put_nowait(
+                            {
+                                "type": "quote",
+                                "symbol": message.symbol,
+                                "quote": existing_quote.model_dump(mode="json"),
+                            }
+                        )
+                    for timeframe in timeframes:
+                        existing_candle = live_service.latest_candle(message.symbol, timeframe)
+                        if existing_candle is not None:
+                            outbound.put_nowait(
+                                {
+                                    "type": "forming_candle",
+                                    "symbol": message.symbol,
+                                    "candle": existing_candle.model_dump(mode="json"),
+                                }
+                            )
                 elif action == "unsubscribe":
                     message = UnsubscribeMessage.model_validate(raw)
                     await live_service.unsubscribe(message.symbol)

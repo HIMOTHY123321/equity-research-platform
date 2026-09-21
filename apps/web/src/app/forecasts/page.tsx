@@ -263,6 +263,8 @@ export default function ForecastLabPage() {
               candles={candles.data.candles}
               forecasts={allForecasts}
               liveCandle={liveCandles[timeframe] ?? null}
+              symbol={symbol}
+              timeframe={timeframe}
             />
           )}
         </section>

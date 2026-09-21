@@ -97,6 +97,33 @@ def test_get_unknown_brief_id_is_404(client):
     assert response.status_code == 404
 
 
+def test_list_recent_briefs_returns_the_saved_report_with_symbol_and_setup_metadata(client):
+    created = client.post("/api/analysis/SPY/brief", params={"timeframe": "1h", "mode": "quick"}).json()
+
+    listing = client.get("/api/analysis/briefs")
+    assert listing.status_code == 200
+    items = listing.json()
+    assert any(item["brief_id"] == created["brief_id"] for item in items)
+    row = next(item for item in items if item["brief_id"] == created["brief_id"])
+    assert row["symbol"] == "SPY"
+    assert row["timeframe"] == "1h"
+    assert row["evidence_packet_id"] == created["evidence_packet_id"]
+    assert row["mode"] == "quick"
+
+
+def test_get_saved_evidence_packet_returns_the_frozen_packet_never_regenerated(client):
+    created = client.post("/api/analysis/SPY/brief", params={"timeframe": "1h", "mode": "quick"}).json()
+
+    packet = client.get(f"/api/analysis/SPY/evidence/{created['evidence_packet_id']}")
+    assert packet.status_code == 200
+    assert packet.json()["packet_id"] == created["evidence_packet_id"]
+
+
+def test_get_unknown_evidence_packet_id_is_404(client):
+    response = client.get("/api/analysis/SPY/evidence/does-not-exist")
+    assert response.status_code == 404
+
+
 @pytest.mark.parametrize("mode", ["quick", "full", "why_this_setup", "why_not", "catalyst", "analogs"])
 def test_every_mode_produces_a_valid_brief(client, mode):
     response = client.post("/api/analysis/SPY/brief", params={"timeframe": "1h", "mode": mode})

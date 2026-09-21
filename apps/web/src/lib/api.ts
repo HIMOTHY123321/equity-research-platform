@@ -1,6 +1,7 @@
 import type {
   AnalogQueryResponse,
   AnalysisMode,
+  BriefListItem,
   CandlesResponse,
   CatalystEvent,
   CatalystEventDetail,
@@ -14,6 +15,7 @@ import type {
   ForwardForecast,
   ForwardValidationGateEvaluation,
   LedgerEntriesResponse,
+  LiveStatusResponse,
   MarketReaction,
   MarketStructureSnapshot,
   NormalizedNewsArticle,
@@ -77,6 +79,12 @@ export function getCandles(
 ): Promise<CandlesResponse> {
   const params = new URLSearchParams({ timeframe, limit: String(limit) });
   return request<CandlesResponse>(`/api/market/${symbol}/candles?${params}`);
+}
+
+/** §5: the one source of truth for whether market data is genuinely
+ * streaming vs. polled -- never inferred from freshness/age alone. */
+export function getLiveStatus(): Promise<LiveStatusResponse> {
+  return request<LiveStatusResponse>("/api/live/status");
 }
 
 export function getWatchlist(): Promise<WatchlistSymbol[]> {
@@ -352,6 +360,16 @@ export function postResearchBrief(params: ResearchBriefParams): Promise<Research
 
 export function getResearchBrief(symbol: string, briefId: string): Promise<ResearchBrief> {
   return request<ResearchBrief>(`/api/analysis/${symbol}/brief/${briefId}`);
+}
+
+/** Hardening pass (§19): the Reports page's list -- every saved brief this
+ * process has ever generated, never regenerated from current market state. */
+export function listRecentBriefs(limit = 100): Promise<BriefListItem[]> {
+  return request<BriefListItem[]>(`/api/analysis/briefs?limit=${limit}`);
+}
+
+export function getSavedEvidencePacket(symbol: string, packetId: string): Promise<EvidencePacket> {
+  return request<EvidencePacket>(`/api/analysis/${symbol}/evidence/${packetId}`);
 }
 
 // ---- Forward Prediction Benchmark & Validation Lab (Phase 12) -------------

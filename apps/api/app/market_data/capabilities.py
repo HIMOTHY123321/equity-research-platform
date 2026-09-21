@@ -42,8 +42,14 @@ class ProviderCapabilities:
 # real exchange feed; the live layer reports observed `age_seconds` instead
 # of trusting a claimed number. `min_poll_interval_seconds` is set well
 # above yfinance's actual rate-limit threshold (already handled defensively
-# in YFinanceMarketDataProvider._history/_fast_info_price via
-# YFRateLimitError retry/backoff) so routine polling doesn't trip it.
+# in YFinanceMarketDataProvider._history via YFRateLimitError retry/backoff)
+# so routine polling doesn't trip it.
+#
+# Hardening pass: raised from 3.0 -> 15.0. get_latest_quote now derives its
+# timestamp from the real most-recent 5-minute bar (never a fabricated
+# now()), so Yahoo's own data genuinely cannot advance faster than every
+# ~5 minutes -- polling every 3s bought nothing but wasted requests and
+# rate-limit risk against data that hadn't actually changed.
 YFINANCE_CAPABILITIES = ProviderCapabilities(
     real_time_quotes=False,
     streaming_quotes=False,
@@ -53,7 +59,7 @@ YFINANCE_CAPABILITIES = ProviderCapabilities(
     historical_intraday=True,
     quote_delay_seconds=None,
     news_delay_seconds=None,
-    min_poll_interval_seconds=3.0,
+    min_poll_interval_seconds=15.0,
 )
 
 # This implementation (app.market_data.alpaca_provider) only ever makes

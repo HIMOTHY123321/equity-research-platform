@@ -83,7 +83,14 @@ def _validated_timeframe(timeframe: str) -> Timeframe:
 def get_candles(
     symbol: str,
     timeframe: str = Query("1d"),
-    limit: int = Query(200, ge=1, le=1000),
+    # Hardening pass (§6/§8): raised from 1000 -> 5000 so a MAX-range daily
+    # chart can reach a full ~10y history (the provider's own real cap --
+    # see YFinanceMarketDataProvider/_YFINANCE_MAX_PERIOD -- already limits
+    # this internally; this is a bound on the request, not a promise every
+    # provider/symbol can fill it). Still explicitly bounded, never
+    # "however many bars exist" -- see docs/decisions on avoiding
+    # unbounded history payloads.
+    limit: int = Query(200, ge=1, le=5000),
     provider: MarketDataProvider = Depends(get_market_data_provider),
 ) -> CandlesResponse:
     validated_symbol = _validated_symbol(symbol)

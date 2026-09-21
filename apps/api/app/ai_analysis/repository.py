@@ -10,6 +10,8 @@ Phase 10: re-saving the same content is a no-op, never a duplicate row.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -18,6 +20,28 @@ from sqlalchemy.orm import Session
 from app.ai_analysis.research_brief import ResearchBrief
 from app.ai_analysis.schemas import EvidencePacket
 from app.database.models import Base, EvidencePacketRecord, ResearchBriefRecord
+
+
+@dataclass(frozen=True)
+class BriefListItem:
+    """Hardening pass (§19): a lightweight read-model for the Reports page
+    -- everything needed to render a list row without deserializing every
+    brief's full JSON payload. `symbol`/`timeframe`/`setup_id` come from the
+    EvidencePacket a brief is permanently bound to, joined by
+    `evidence_packet_id` (never duplicated onto ResearchBrief itself, which
+    has no symbol field of its own)."""
+
+    brief_id: str
+    evidence_packet_id: str
+    symbol: str
+    timeframe: str
+    setup_id: Optional[str]
+    mode: str
+    provider: str
+    model: Optional[str]
+    prompt_version: str
+    generated_at: datetime
+    as_of: datetime
 
 
 class EvidenceRepository(ABC):
@@ -35,6 +59,9 @@ class EvidenceRepository(ABC):
 
     @abstractmethod
     def list_briefs_for_packet(self, evidence_packet_id: str, *, limit: int = 50) -> list[ResearchBrief]: ...
+
+    @abstractmethod
+    def list_recent_briefs(self, *, limit: int = 100) -> list["BriefListItem"]: ...
 
 
 class SqlAlchemyEvidenceRepository(EvidenceRepository):
@@ -109,3 +136,39 @@ class SqlAlchemyEvidenceRepository(EvidenceRepository):
             .limit(limit)
         ).scalars()
         return [ResearchBrief.model_validate(row.payload) for row in rows]
+
+    def list_recent_briefs(self, *, limit: int = 100) -> list[BriefListItem]:
+        rows = self._session.execute(
+            select(ResearchBriefRecord, EvidencePacketRecord)
+            .join(
+                EvidencePacketRecord,
+                EvidencePacketRecord.packet_id == ResearchBriefRecord.evidence_packet_id,
+            )
+            .order_by(ResearchBriefRecord.created_at.desc())
+            .limit(limit)
+        ).all()
+        return [
+            BriefListItem(
+                brief_id=brief.brief_id,
+                evidence_packet_id=brief.evidence_packet_id,
+                symbol=packet.symbol,
+                timeframe=packet.timeframe,
+                setup_id=packet.setup_id,
+                mode=brief.mode,
+                provider=brief.provider,
+                model=brief.model,
+                prompt_version=brief.prompt_version,
+                generated_at=_parse_generated_at(brief.payload.get("generated_at"), brief.as_of),
+                as_of=brief.as_of,
+            )
+            for brief, packet in rows
+        ]
+
+
+def _parse_generated_at(raw: Optional[str], fallback: datetime) -> datetime:
+    if raw is None:
+        return fallback
+    try:
+        return datetime.fromisoformat(raw)
+    except ValueError:
+        return fallback

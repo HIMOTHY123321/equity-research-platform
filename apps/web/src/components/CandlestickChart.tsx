@@ -15,6 +15,7 @@ import {
 } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 
+import { liveCandleMatchesSelection, resolveLiveCandleAction } from "@/lib/chartLiveMerge";
 import { formatEnumLabel, formatExchangeTimestamp, swingClassificationAbbrev } from "@/lib/format";
 import type {
   BreakOfStructureEvent,
@@ -105,6 +106,8 @@ export function CandlestickChart({
   forecasts,
   liveCandle,
   display = DEFAULT_CHART_DISPLAY_OPTIONS,
+  symbol,
+  timeframe,
 }: {
   candles: Candle[];
   structure?: StructureOverlay;
@@ -114,9 +117,25 @@ export function CandlestickChart({
   /** Phase 12.1 (#X): the current forming bar, supplied by the caller via
    * useLiveSymbol -- updates the chart's rightmost candle automatically,
    * every time a new quote arrives, with no refresh. Purely visual: never
-   * fed back into `candles`, never touches structure/setup computation. */
+   * fed back into `candles`, never touches structure/setup computation.
+   *
+   * Hardening pass: `candles` (REST) and `liveCandle` (WS overlay) are two
+   * independent async sources with no ordering guarantee against each
+   * other's *data* -- only render order. `latestSeriesTimeRef` (set
+   * whenever `candles` is (re)loaded into the series) is the single source
+   * of truth for "what's the newest time already in the series"; every
+   * `series.update()` call is gated against it so an older/stale live tick
+   * can never be handed to lightweight-charts as an update to already-newer
+   * data (which throws "Cannot update oldest data" rather than failing
+   * gracefully). */
   liveCandle?: LiveCandle | null;
   display?: ChartDisplayOptions;
+  /** The symbol/timeframe this chart is currently displaying -- compared
+   * against `liveCandle.symbol`/`.timeframe` so a stale overlay object still
+   * in flight from the *previous* selection can never leak onto the new
+   * one (§13), even though `liveCandle` itself changed identity. */
+  symbol: string;
+  timeframe: string;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -127,6 +146,11 @@ export function CandlestickChart({
   useEffect(() => {
     candlesRef.current = candles;
   }, [candles]);
+  // The newest UTCTimestamp actually committed to the series -- reset every
+  // time `candles` is reloaded (new symbol/timeframe, or a refetch that
+  // advanced the authoritative newest bar), read by the liveCandle effect
+  // below to reject stale/out-of-order updates instead of crashing.
+  const latestSeriesTimeRef = useRef<UTCTimestamp | null>(null);
   const forecastsRef = useRef<ForwardForecast[]>(forecasts ?? []);
   useEffect(() => {
     forecastsRef.current = forecasts ?? [];
@@ -204,8 +228,11 @@ export function CandlestickChart({
     const series = seriesRef.current;
     if (!series) return;
 
+    const sorted = [...candles].sort(
+      (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+    );
     series.setData(
-      candles.map((candle) => ({
+      sorted.map((candle) => ({
         time: toUtcTimestamp(candle.timestamp),
         open: candle.open,
         high: candle.high,
@@ -213,24 +240,43 @@ export function CandlestickChart({
         close: candle.close,
       })),
     );
+    // The authoritative newest bar just (re)loaded from REST is always the
+    // floor for what a live update may touch -- reset on every load, never
+    // carried over from a previous symbol/timeframe/refetch.
+    latestSeriesTimeRef.current = sorted.length
+      ? toUtcTimestamp(sorted[sorted.length - 1].timestamp)
+      : null;
     chartRef.current?.timeScale().fitContent();
   }, [candles]);
 
   useEffect(() => {
     const series = seriesRef.current;
     if (!series || !liveCandle) return;
+    // A liveCandle object for the *previous* symbol/timeframe selection can
+    // still be in flight (async) after the user has already switched --
+    // never let it leak onto the new chart (§13), even momentarily.
+    if (!liveCandleMatchesSelection(liveCandle, symbol, timeframe)) return;
+
+    const liveTime = toUtcTimestamp(liveCandle.timestamp);
+    const action = resolveLiveCandleAction(liveTime, latestSeriesTimeRef.current);
+    if (action === "ignore") return;
     // Purely visual (#G): overlays the forming bar onto the chart via
     // lightweight-charts' own last-bar update -- never appended to
     // `candles`, never touched by structure/setup detection, which only
-    // ever sees what get_candles() authoritatively returns.
+    // ever sees what get_candles() authoritatively returns. `action` is
+    // "update" (equal time, same bar) or "append" (strictly newer, a new
+    // forming bar) -- lightweight-charts' own `series.update()` handles
+    // both natively; only "ignore" (a stale/out-of-order tick) is a case
+    // this component must reject itself.
     series.update({
-      time: toUtcTimestamp(liveCandle.timestamp),
+      time: liveTime,
       open: liveCandle.open,
       high: liveCandle.high,
       low: liveCandle.low,
       close: liveCandle.close,
     });
-  }, [liveCandle]);
+    latestSeriesTimeRef.current = liveTime;
+  }, [liveCandle, symbol, timeframe]);
 
   useEffect(() => {
     const markersApi = markersApiRef.current;

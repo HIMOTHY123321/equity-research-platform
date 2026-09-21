@@ -320,7 +320,14 @@ const FRESHNESS_LABELS: Record<string, string> = {
   market_closed: "MARKET CLOSED",
 };
 
-export function formatFreshnessLabel(state: string): string {
+/** §5: "LIVE" must never be shown merely because our own backend
+ * connection/poll succeeded -- only when the underlying market data is
+ * both fresh (`state === "live"`) AND the active provider is genuinely
+ * push-streaming (`streamingActive`). A fresh *poll* against a non-
+ * streaming provider (yfinance) is truthfully "LATEST AVAILABLE", not
+ * "LIVE" -- API CONNECTED and MARKET DATA LIVE are not the same claim. */
+export function formatFreshnessLabel(state: string, streamingActive = false): string {
+  if (state === "live") return streamingActive ? "STREAMING LIVE" : "LATEST AVAILABLE";
   return FRESHNESS_LABELS[state] ?? state.toUpperCase();
 }
 

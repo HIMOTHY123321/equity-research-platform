@@ -2,6 +2,7 @@
 
 import { formatAgeSeconds, formatExchangeTimestamp, formatFreshnessLabel, freshnessColorClass, freshnessDotClass } from "@/lib/format";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
+import { useStreamingActive } from "@/hooks/useStreamingActive";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -13,6 +14,7 @@ import type { Timeframe } from "@/lib/types";
  */
 export function LiveQuoteHeader({ symbol, timeframe }: { symbol: string; timeframe: Timeframe }) {
   const { quote, connectionState } = useLiveSymbol(symbol, [timeframe]);
+  const streamingActive = useStreamingActive();
 
   if (!quote) {
     return (
@@ -43,15 +45,24 @@ export function LiveQuoteHeader({ symbol, timeframe }: { symbol: string; timefra
         <span className="flex items-center gap-1.5">
           <span className={`h-1.5 w-1.5 rounded-full ${freshnessDotClass(freshness.freshness_state)}`} />
           <span className={freshnessColorClass(freshness.freshness_state)}>
-            {formatFreshnessLabel(freshness.freshness_state)}
+            {formatFreshnessLabel(freshness.freshness_state, streamingActive)}
           </span>
         </span>
         <span className="text-muted" title={freshness.source_timestamp ? formatExchangeTimestamp(freshness.source_timestamp) : undefined}>
           {formatAgeSeconds(freshness.age_seconds)}
         </span>
-        <span className="text-muted">via {freshness.provider}</span>
+        <span className="text-muted">
+          via {freshness.provider}
+          {!streamingActive && freshness.provider === "yfinance" ? " development feed" : ""}
+        </span>
         {quote.is_approximate && <span className="text-muted">(approximate)</span>}
       </div>
+      {/* §4/§5: the underlying MARKET DATA timestamp, always shown
+          explicitly -- age/freshness alone can be misread as "just polled"
+          rather than "as of this real event". */}
+      {freshness.source_timestamp && (
+        <div className="text-muted">Last market data: {formatExchangeTimestamp(freshness.source_timestamp)}</div>
+      )}
       {hasStreamingFields && (quote.last_trade_timestamp || quote.nbbo_timestamp) && (
         <div className="flex flex-wrap items-center gap-3 text-muted">
           {quote.last_trade_timestamp && (

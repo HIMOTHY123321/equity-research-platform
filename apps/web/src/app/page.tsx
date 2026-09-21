@@ -2,8 +2,16 @@ import { MarketWorkspace } from "@/components/MarketWorkspace";
 import { TopNav } from "@/components/TopNav";
 import { checkApiHealth } from "@/lib/api";
 
-export default async function Home() {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ symbol?: string }>;
+}) {
   const health = await checkApiHealth();
+  // Lets a Watchlist row link (`/?symbol=NVDA`) select that ticker on
+  // arrival, instead of always resetting to the hardcoded default (§18).
+  const { symbol } = await searchParams;
+  const defaultSymbol = symbol?.trim() ? symbol.trim().toUpperCase() : "SPY";
 
   return (
     <div className="flex min-h-full flex-col">
@@ -21,7 +29,7 @@ export default async function Home() {
           </div>
         </div>
 
-        <MarketWorkspace defaultSymbol="SPY" />
+        <MarketWorkspace defaultSymbol={defaultSymbol} />
       </main>
     </div>
   );

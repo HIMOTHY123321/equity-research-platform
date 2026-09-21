@@ -79,9 +79,59 @@ class _QueueProvider(MarketDataProvider):
         return PreviousClose(symbol=symbol, trading_date=_BASE.date(), close=100.0, volume=1_000_000)
 
 
+class _StaticProvider(MarketDataProvider):
+    """Returns the exact same quote every call -- reproduces the real
+    yfinance-honest-timestamp scenario (Hardening pass): the underlying
+    market data genuinely hasn't changed, so every poll is correctly
+    deduplicated and no new QuoteEvent is ever published to the bus."""
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            real_time_quotes=True,
+            streaming_quotes=False,
+            streaming_trades=False,
+            streaming_bars=False,
+            streaming_news=False,
+            historical_intraday=True,
+            quote_delay_seconds=0.05,
+            min_poll_interval_seconds=0.02,
+        )
+
+    def get_candles(self, symbol, timeframe, limit=200):
+        return []
+
+    def get_latest_quote(self, symbol):
+        return Quote(
+            symbol=symbol,
+            timestamp=_BASE,
+            session=MarketSession.REGULAR,
+            bid_price=100.0,
+            bid_size=0.0,
+            ask_price=100.0,
+            ask_size=0.0,
+            is_approximate=False,
+        )
+
+    def get_previous_close(self, symbol):
+        return PreviousClose(symbol=symbol, trading_date=_BASE.date(), close=100.0, volume=1_000_000)
+
+
 @pytest.fixture
 def client():
     provider = _QueueProvider()
+    app.dependency_overrides[get_market_data_provider] = lambda: provider
+    app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
+    app.state.live_config = _FAST_CONFIG
+    with TestClient(app) as test_client:
+        yield test_client, provider
+    app.dependency_overrides.clear()
+    if hasattr(app.state, "live_config"):
+        del app.state.live_config
+
+
+@pytest.fixture
+def static_client():
+    provider = _StaticProvider()
     app.dependency_overrides[get_market_data_provider] = lambda: provider
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
     app.state.live_config = _FAST_CONFIG
@@ -145,6 +195,29 @@ def test_a_new_connection_receives_the_current_connection_status_immediately(cli
             snapshot = ws2.receive_json()
             assert snapshot["type"] == "connection_status"
             assert snapshot["status"]["state"] == "connected"
+
+
+def test_a_new_connection_gets_the_already_known_quote_even_with_no_new_data(static_client):
+    # Hardening pass regression: found via manual browser testing after
+    # fixing yfinance's fabricated quote timestamp (see
+    # YFinanceMarketDataProvider.get_latest_quote) -- once duplicate
+    # (unchanged) polls are correctly deduplicated and stop publishing new
+    # QuoteEvents, a *second* connection subscribing to an already-tracked
+    # symbol must still see the already-known quote immediately, not sit on
+    # "no quote yet" until the underlying data source happens to change
+    # (which for yfinance can be minutes away).
+    test_client, _provider = static_client
+    with test_client.websocket_connect("/api/live/stream") as ws1:
+        ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        frames = [ws1.receive_json() for _ in range(3)]
+        assert any(f["type"] == "quote" for f in frames)
+
+        with test_client.websocket_connect("/api/live/stream") as ws2:
+            ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+            second_connection_frames = [ws2.receive_json() for _ in range(2)]
+            quote_frame = next(f for f in second_connection_frames if f["type"] == "quote")
+            assert quote_frame["symbol"] == "SPY"
+            assert quote_frame["quote"]["price"] == 100.0
 
 
 def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):

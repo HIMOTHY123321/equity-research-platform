@@ -1327,6 +1327,22 @@ export interface ResearchBrief {
   grounding_violations: string[];
 }
 
+// Hardening pass (§19): the Reports page's list-row shape -- see
+// app.api.routes.analysis.BriefListItemOut.
+export interface BriefListItem {
+  brief_id: string;
+  evidence_packet_id: string;
+  symbol: string;
+  timeframe: string;
+  setup_id: string | null;
+  mode: AnalysisMode;
+  provider: string;
+  model: string | null;
+  prompt_version: string;
+  generated_at: string;
+  as_of: string;
+}
+
 // ---- Forward Prediction Benchmark & Validation Lab (Phase 12) -------------
 //
 // A ForwardForecast is a locked, machine-evaluable hypothesis bound to a
@@ -1536,9 +1552,25 @@ export interface LiveProviderCapabilities {
   min_poll_interval_seconds: number;
 }
 
+export interface LiveLatencySummary {
+  event_type: string;
+  symbol: string;
+  provider: string;
+  count: number;
+  median_seconds: number;
+  p95_seconds: number;
+  p99_seconds: number;
+  max_seconds: number;
+}
+
 export interface LiveStatusResponse {
   capabilities: LiveProviderCapabilities;
+  // Truthful even when the backend connection itself is healthy (§5):
+  // false whenever no genuinely push-streaming provider is configured,
+  // regardless of how fresh polled data happens to be.
+  streaming_active: boolean;
   connection_status: LiveConnectionStatus;
+  latency: LiveLatencySummary[];
 }
 
 export type LiveSubscriptionPriority = "viewed" | "active_forecast" | "watchlist" | "background_benchmark";
