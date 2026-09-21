@@ -3,6 +3,8 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import { ApiError, addWatchlistSymbol, getWatchlist, removeWatchlistSymbol } from "@/lib/api";
+import { useLiveSymbol } from "@/hooks/useLiveSymbol";
+import { formatSignedPercent, freshnessDotClass } from "@/lib/format";
 import type { WatchlistSymbol } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
@@ -94,29 +96,68 @@ export function Watchlist({
 
       <ul className="flex flex-col gap-0.5">
         {symbols.map((s) => (
-          <li key={s.ticker} className="flex items-center justify-between">
-            <button
-              type="button"
-              onClick={() => onSelect(s.ticker)}
-              className={`flex-1 rounded px-2 py-1 text-left font-mono text-xs transition-colors ${
-                s.ticker === selected
-                  ? "bg-surface-raised text-foreground"
-                  : "text-muted hover:text-foreground"
-              }`}
-            >
-              {s.ticker}
-            </button>
-            <button
-              type="button"
-              onClick={() => handleRemove(s.ticker)}
-              aria-label={`Remove ${s.ticker}`}
-              className="px-2 text-[11px] text-muted hover:text-negative"
-            >
-              ✕
-            </button>
-          </li>
+          <WatchlistRow
+            key={s.ticker}
+            ticker={s.ticker}
+            selected={s.ticker === selected}
+            onSelect={() => onSelect(s.ticker)}
+            onRemove={() => handleRemove(s.ticker)}
+          />
         ))}
       </ul>
     </div>
+  );
+}
+
+/** Phase 12.1 (#N): watchlist tickers update automatically without opening
+ * each one -- subscribed at "watchlist" priority (below the viewed ticker
+ * and any active-forecast symbol, but still live) so a large watchlist
+ * never starves the symbol the user is actually looking at. */
+function WatchlistRow({
+  ticker,
+  selected,
+  onSelect,
+  onRemove,
+}: {
+  ticker: string;
+  selected: boolean;
+  onSelect: () => void;
+  onRemove: () => void;
+}) {
+  const { quote } = useLiveSymbol(ticker, ["1h"], "watchlist");
+
+  return (
+    <li className="flex items-center justify-between gap-1">
+      <button
+        type="button"
+        onClick={onSelect}
+        className={`flex flex-1 items-center justify-between gap-1 rounded px-2 py-1 text-left font-mono text-xs transition-colors ${
+          selected ? "bg-surface-raised text-foreground" : "text-muted hover:text-foreground"
+        }`}
+      >
+        <span className="flex items-center gap-1.5">
+          {quote && <span className={`h-1.5 w-1.5 rounded-full ${freshnessDotClass(quote.freshness.freshness_state)}`} />}
+          {ticker}
+        </span>
+        {quote && (
+          <span className="flex items-center gap-1.5 text-[10px]">
+            <span>{quote.price.toFixed(2)}</span>
+            {quote.percent_change !== null && (
+              <span className={quote.percent_change >= 0 ? "text-positive" : "text-negative"}>
+                {formatSignedPercent(quote.percent_change)}
+              </span>
+            )}
+          </span>
+        )}
+      </button>
+      <button
+        type="button"
+        onClick={onRemove}
+        aria-label={`Remove ${ticker}`}
+        className="px-2 text-[11px] text-muted hover:text-negative"
+      >
+        ✕
+      </button>
+    </li>
   );
 }

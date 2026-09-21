@@ -5,6 +5,7 @@ of caching concerns so it stays simple to test in isolation.
 from __future__ import annotations
 
 from app.market_data.cache import Cache
+from app.market_data.capabilities import ProviderCapabilities
 from app.market_data.provider import MarketDataProvider
 from app.schemas.market_data import Candle, PreviousClose, Quote, Timeframe
 
@@ -27,6 +28,9 @@ class CachedMarketDataProvider(MarketDataProvider):
         self._candles_ttl = candles_ttl
         self._quote_ttl = quote_ttl
         self._previous_close_ttl = previous_close_ttl
+
+    def capabilities(self) -> ProviderCapabilities:
+        return self._inner.capabilities()
 
     def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
         key = f"candles:{symbol}:{timeframe.value}:{limit}"

@@ -7,6 +7,7 @@ import { FeaturePanel } from "@/components/FeaturePanel";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
 import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
+import { LiveQuoteHeader } from "@/components/LiveQuoteHeader";
 import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
 import { TimeframeSelector } from "@/components/TimeframeSelector";
 import { Watchlist } from "@/components/Watchlist";
@@ -19,6 +20,7 @@ import {
   useStructure,
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
+import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -43,6 +45,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
   const levelsQuery = useLevels(symbol, timeframe);
   const setupsQuery = useSetups(symbol, timeframe);
   const catalystsQuery = useSymbolCatalysts(symbol);
+  const { candles: liveCandles } = useLiveSymbol(symbol, [timeframe]);
 
   const candles = candlesQuery.data?.candles ?? [];
   const chartState =
@@ -58,7 +61,10 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
 
         <section className="rounded-md border border-border bg-surface">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
-            <h2 className="font-mono text-sm font-semibold text-foreground">{symbol}</h2>
+            <div className="flex items-center gap-3">
+              <h2 className="font-mono text-sm font-semibold text-foreground">{symbol}</h2>
+              <LiveQuoteHeader symbol={symbol} timeframe={timeframe} />
+            </div>
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-1.5 text-[10px]">
                 {(
@@ -127,6 +133,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                     ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates]
                     : undefined
                 }
+                liveCandle={liveCandles[timeframe] ?? null}
                 display={display}
               />
             )}

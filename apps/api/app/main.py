@@ -3,13 +3,17 @@
 Route modules are added phase-by-phase as the pipeline is built out.
 """
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from app.api.deps import get_market_data_provider, get_news_provider, get_shared_market_data_cache
 from app.api.routes import (
     analysis,
     forecasts,
+    live,
     market,
     news,
     research,
@@ -18,6 +22,13 @@ from app.api.routes import (
     watchlist,
 )
 from app.config import get_settings
+from app.database.models import Base
+from app.database.session import SessionLocal, engine
+from app.live.config import DEFAULT_LIVE_CONFIG
+from app.live.forecast_monitor import ForecastMonitor
+from app.live.news_monitor import NewsMonitor
+from app.live.recompute import RecomputationEngine
+from app.live.service import LiveMarketService
 from app.market_data.exceptions import (
     AuthenticationError,
     InvalidSymbolError,
@@ -28,7 +39,68 @@ from app.market_data.exceptions import (
 
 settings = get_settings()
 
-app = FastAPI(title="AI Market Desk API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Every repository creates its own tables lazily, on first
+    # instantiation (`Base.metadata.create_all(..., checkfirst=True)`) --
+    # safe under normal single-request-at-a-time access, but Phase 12.1
+    # adds several background threads (RecomputationEngine/ForecastMonitor/
+    # NewsMonitor, each doing their own DB work via asyncio.to_thread) that
+    # now routinely start at the same moment as the first browser request's
+    # own (thread-pooled) route handlers. On a brand-new SQLite file,
+    # checkfirst's own "inspect, then create if missing" is not atomic
+    # across separate connections/threads -- two threads can both see a
+    # table as missing and both issue CREATE TABLE, and the loser raises
+    # "table already exists" (observed live during this phase's browser
+    # validation). Creating every table once, synchronously, before any
+    # background thread starts closes that race outright: by the time
+    # anything concurrent runs, there is no "missing table" window left for
+    # two threads to race over.
+    Base.metadata.create_all(bind=engine, checkfirst=True)
+
+    # Phase 12.1: the one set of process-wide live-engine singletons --
+    # every WebSocket connection shares these, never spinning up its own
+    # poll loop/monitor (#O). Real network/DB work only ever happens once a
+    # symbol is actually subscribed or a monitor's own timer fires; nothing
+    # here talks to a provider at startup.
+    #
+    # Respects app.dependency_overrides the same way route-level Depends()
+    # already does -- lifespan itself isn't a request, so FastAPI's own
+    # override mechanism doesn't reach it automatically; this is what lets
+    # integration tests inject a deterministic fake provider for the live
+    # engines instead of always hitting the real configured one.
+    market_provider = app.dependency_overrides.get(get_market_data_provider, get_market_data_provider)()
+    news_provider = app.dependency_overrides.get(get_news_provider, get_news_provider)()
+    cache = get_shared_market_data_cache()
+    live_config = getattr(app.state, "live_config", DEFAULT_LIVE_CONFIG)
+
+    live_service = LiveMarketService(
+        market_provider, provider_name=settings.market_data_provider, config=live_config
+    )
+    recompute_engine = RecomputationEngine(live_service, market_provider, cache)
+    forecast_monitor = ForecastMonitor(SessionLocal, market_provider, news_provider, config=live_config)
+    news_monitor = NewsMonitor(SessionLocal, news_provider, config=live_config)
+
+    app.state.live_service = live_service
+    app.state.recompute_engine = recompute_engine
+    app.state.forecast_monitor = forecast_monitor
+    app.state.news_monitor = news_monitor
+
+    await recompute_engine.start()
+    await forecast_monitor.start()
+    await news_monitor.start()
+
+    try:
+        yield
+    finally:
+        await news_monitor.stop()
+        await forecast_monitor.stop()
+        await recompute_engine.stop()
+        await live_service.shutdown()
+
+
+app = FastAPI(title="AI Market Desk API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -47,6 +119,7 @@ app.include_router(news.catalyst_router)
 app.include_router(research_catalysts.router)
 app.include_router(analysis.router)
 app.include_router(forecasts.router)
+app.include_router(live.router)
 
 
 @app.exception_handler(AuthenticationError)

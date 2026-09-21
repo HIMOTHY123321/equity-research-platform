@@ -308,6 +308,49 @@ export function evidenceQualityColorClass(quality: string): string {
   return "text-muted";
 }
 
+// ---- Automatic Live Data & Event-Driven Updates (Phase 12.1) -------------
+
+const FRESHNESS_LABELS: Record<string, string> = {
+  live: "LIVE",
+  recent: "RECENT",
+  delayed: "DELAYED",
+  stale: "STALE",
+  disconnected: "DISCONNECTED",
+  unavailable: "UNAVAILABLE",
+  market_closed: "MARKET CLOSED",
+};
+
+export function formatFreshnessLabel(state: string): string {
+  return FRESHNESS_LABELS[state] ?? state.toUpperCase();
+}
+
+export function freshnessColorClass(state: string): string {
+  if (state === "live") return "text-positive";
+  if (state === "recent") return "text-accent";
+  if (state === "delayed") return "text-amber-600 dark:text-amber-400";
+  if (state === "stale" || state === "disconnected") return "text-negative";
+  return "text-muted";
+}
+
+export function freshnessDotClass(state: string): string {
+  if (state === "live") return "bg-positive";
+  if (state === "recent") return "bg-accent";
+  if (state === "delayed") return "bg-amber-500";
+  if (state === "stale" || state === "disconnected") return "bg-negative";
+  return "bg-muted";
+}
+
+/** Never a bare current-time label -- always the elapsed time since the
+ * value's own source_timestamp (#F/#U), so a stale value can never look
+ * fresher than it actually is. */
+export function formatAgeSeconds(age: number | null): string {
+  if (age === null) return "—";
+  if (age < 1) return "<1s ago";
+  if (age < 60) return `${age.toFixed(1)}s ago`;
+  if (age < 3600) return `${Math.round(age / 60)}m ago`;
+  return `${Math.round(age / 3600)}h ago`;
+}
+
 export function gateDecisionColorClass(decision: string): string {
   if (decision === "pass") return "text-positive";
   if (decision === "promising") return "text-amber-600 dark:text-amber-400";

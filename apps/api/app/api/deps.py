@@ -33,6 +33,15 @@ def _shared_cache() -> InMemoryCache:
     return InMemoryCache()
 
 
+def get_shared_market_data_cache() -> InMemoryCache:
+    """Public accessor for the same process-wide cache instance
+    get_market_data_provider() uses underneath -- Phase 12.1's
+    RecomputationEngine needs this exact instance (not a new one) so a
+    completed-candle-triggered cache invalidation actually affects what
+    routes/build_market_snapshot see next."""
+    return _shared_cache()
+
+
 def _build_inner_provider() -> MarketDataProvider:
     provider_name = get_settings().market_data_provider.lower()
     if provider_name == "alpaca":

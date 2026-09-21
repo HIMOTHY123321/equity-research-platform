@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useState } from "react";
 
 import { CandlestickChart } from "@/components/CandlestickChart";
 import { TopNav } from "@/components/TopNav";
@@ -10,16 +10,20 @@ import {
   forecastStatusColorClass,
   formatEnumLabel,
   formatExchangeTimestamp,
+  freshnessColorClass,
+  freshnessDotClass,
   gateDecisionColorClass,
 } from "@/lib/format";
 import { ApiError, postForecast, resolveForecast } from "@/lib/api";
 import { useForecastGate, useForecastList, useForecastPerformance } from "@/hooks/useForecasts";
 import { useCandles, useSetups } from "@/hooks/useMarketQueries";
+import { useLiveConnectionState, useLiveGlobalEvent, useLiveSymbol } from "@/hooks/useLiveSymbol";
 import type {
   ForecastCategoryKind,
   ForecastOutcome,
   ForecastPerformanceBreakdown,
   ForwardForecast,
+  LiveServerFrame,
   Timeframe,
 } from "@/lib/types";
 
@@ -85,9 +89,24 @@ export default function ForecastLabPage() {
 
   const candles = useCandles(symbol, timeframe, 300);
   const setups = useSetups(symbol, timeframe);
+  const { candles: liveCandles } = useLiveSymbol(symbol, [timeframe]);
   const forecasts = useForecastList({ symbol, refreshKey });
   const performance = useForecastPerformance(symbol, refreshKey);
   const gate = useForecastGate(refreshKey);
+  const connectionState = useLiveConnectionState();
+
+  // Phase 12.1 (#I/#W): forecasts also resolve automatically in the
+  // background (app.live.forecast_monitor), independent of this page even
+  // being open. No refresh button -- a forecast_resolved push over the
+  // shared live WebSocket connection is what moves a forecast from ACTIVE
+  // to RESOLVED here and refreshes performance/gate.
+  const handleLiveEvent = useCallback((frame: LiveServerFrame) => {
+    if (frame.type === "forecast_resolved") {
+      setOutcomesByForecastId((prev) => ({ ...prev, [frame.forecast_id]: frame.outcome }));
+      setRefreshKey((k) => k + 1);
+    }
+  }, []);
+  useLiveGlobalEvent(handleLiveEvent);
 
   const setupPool = setups.data
     ? [...setups.data.qualified_setups, ...setups.data.candidates, ...setups.data.rejected_candidates]
@@ -127,7 +146,10 @@ export default function ForecastLabPage() {
   }
 
   const allForecasts = forecasts.data ?? [];
-  const activeForecasts = allForecasts.filter((f) => f.status === "active");
+  const resolvedForecastIds = new Set(Object.keys(outcomesByForecastId));
+  const activeForecasts = allForecasts.filter(
+    (f) => f.status === "active" && !resolvedForecastIds.has(f.forecast_id),
+  );
   const abstainedForecasts = allForecasts.filter((f) => f.status === "abstained");
   const resolvedRows = allForecasts
     .map((f) => ({ forecast: f, outcome: outcomesByForecastId[f.forecast_id] }))
@@ -137,13 +159,21 @@ export default function ForecastLabPage() {
     <div className="flex min-h-full flex-col">
       <TopNav />
       <main className="mx-auto w-full max-w-[1400px] flex-1 space-y-5 px-6 py-6">
-        <div>
-          <h1 className="font-mono text-lg font-semibold">FORECAST LAB</h1>
-          <p className="text-xs text-muted">
-            Prospective forward validation -- locked, machine-evaluable forecasts against a frozen evidence packet,
-            resolved only once the horizon genuinely closes. No BUY/SELL, no price targets, no probabilities. RANKING
-            GATE remains FAIL; this measures forecast accuracy only.
-          </p>
+        <div className="flex flex-wrap items-start justify-between gap-2">
+          <div>
+            <h1 className="font-mono text-lg font-semibold">FORECAST LAB</h1>
+            <p className="text-xs text-muted">
+              Prospective forward validation -- locked, machine-evaluable forecasts against a frozen evidence packet,
+              resolved only once the horizon genuinely closes. No BUY/SELL, no price targets, no probabilities. RANKING
+              GATE remains FAIL; this measures forecast accuracy only.
+            </p>
+          </div>
+          <div className="flex items-center gap-1.5 whitespace-nowrap font-mono text-[11px]">
+            <span className={`h-1.5 w-1.5 rounded-full ${freshnessDotClass(connectionState === "connected" ? "live" : "disconnected")}`} />
+            <span className={freshnessColorClass(connectionState === "connected" ? "live" : "disconnected")}>
+              {connectionState === "connected" ? "AUTO-UPDATING" : connectionState === "resyncing" ? "RESYNCING" : "DISCONNECTED"}
+            </span>
+          </div>
         </div>
 
         {/* ---- BLIND BENCHMARK ---- */}
@@ -228,7 +258,13 @@ export default function ForecastLabPage() {
 
         {/* ---- CHART ---- */}
         <section className="h-[420px] rounded-md border border-border bg-surface p-2">
-          {candles.data && <CandlestickChart candles={candles.data.candles} forecasts={allForecasts} />}
+          {candles.data && (
+            <CandlestickChart
+              candles={candles.data.candles}
+              forecasts={allForecasts}
+              liveCandle={liveCandles[timeframe] ?? null}
+            />
+          )}
         </section>
 
         {/* ---- ACTIVE FORECASTS ---- */}

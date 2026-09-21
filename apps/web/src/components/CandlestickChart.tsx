@@ -15,12 +15,13 @@ import {
 } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 
-import { formatExchangeTimestamp, swingClassificationAbbrev } from "@/lib/format";
+import { formatEnumLabel, formatExchangeTimestamp, swingClassificationAbbrev } from "@/lib/format";
 import type {
   BreakOfStructureEvent,
   Candle,
   ChangeOfCharacterEvent,
   ForwardForecast,
+  LiveCandle,
   SetupCandidate,
   SwingPoint,
   Zone,
@@ -102,6 +103,7 @@ export function CandlestickChart({
   zones,
   setups,
   forecasts,
+  liveCandle,
   display = DEFAULT_CHART_DISPLAY_OPTIONS,
 }: {
   candles: Candle[];
@@ -109,6 +111,11 @@ export function CandlestickChart({
   zones?: ZoneOverlay;
   setups?: SetupCandidate[];
   forecasts?: ForwardForecast[];
+  /** Phase 12.1 (#X): the current forming bar, supplied by the caller via
+   * useLiveSymbol -- updates the chart's rightmost candle automatically,
+   * every time a new quote arrives, with no refresh. Purely visual: never
+   * fed back into `candles`, never touches structure/setup computation. */
+  liveCandle?: LiveCandle | null;
   display?: ChartDisplayOptions;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -120,11 +127,19 @@ export function CandlestickChart({
   useEffect(() => {
     candlesRef.current = candles;
   }, [candles]);
+  const forecastsRef = useRef<ForwardForecast[]>(forecasts ?? []);
+  useEffect(() => {
+    forecastsRef.current = forecasts ?? [];
+  }, [forecasts]);
   // Crosshair-hover readout (#L): the x-axis itself stays uncluttered
   // (lightweight-charts' own abbreviated tick labels); the full
   // `YYYY-MM-DD HH:mm:ss EST/EDT` timestamp only ever appears here, on
   // hover/selection -- never as a current-time label for a historical bar.
   const [hoveredTimestamp, setHoveredTimestamp] = useState<string | null>(null);
+  // Phase 12.1 (#X): forecast marker tooltip -- ticker/id/created/
+  // market-as-of/horizon/state/resolution, shown when hovering the bar a
+  // forecast was locked against.
+  const [hoveredForecast, setHoveredForecast] = useState<ForwardForecast | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -162,11 +177,16 @@ export function CandlestickChart({
     const handleCrosshairMove = (param: { time?: Time }) => {
       if (param.time === undefined) {
         setHoveredTimestamp(null);
+        setHoveredForecast(null);
         return;
       }
       const seconds = param.time as number;
       const candle = candlesRef.current.find((c) => Math.floor(new Date(c.timestamp).getTime() / 1000) === seconds);
       setHoveredTimestamp(candle?.timestamp ?? null);
+      const forecast = forecastsRef.current.find(
+        (f) => Math.floor(new Date(f.market_as_of).getTime() / 1000) === seconds,
+      );
+      setHoveredForecast(forecast ?? null);
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
@@ -195,6 +215,22 @@ export function CandlestickChart({
     );
     chartRef.current?.timeScale().fitContent();
   }, [candles]);
+
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !liveCandle) return;
+    // Purely visual (#G): overlays the forming bar onto the chart via
+    // lightweight-charts' own last-bar update -- never appended to
+    // `candles`, never touched by structure/setup detection, which only
+    // ever sees what get_candles() authoritatively returns.
+    series.update({
+      time: toUtcTimestamp(liveCandle.timestamp),
+      open: liveCandle.open,
+      high: liveCandle.high,
+      low: liveCandle.low,
+      close: liveCandle.close,
+    });
+  }, [liveCandle]);
 
   useEffect(() => {
     const markersApi = markersApiRef.current;
@@ -340,6 +376,19 @@ export function CandlestickChart({
       {hoveredTimestamp && (
         <div className="pointer-events-none absolute left-2 top-2 rounded border border-border bg-surface/90 px-2 py-1 font-mono text-[11px] text-foreground">
           {formatExchangeTimestamp(hoveredTimestamp)}
+        </div>
+      )}
+      {hoveredForecast && (
+        <div className="pointer-events-none absolute left-2 top-9 max-w-[260px] space-y-0.5 rounded border border-border bg-surface/95 px-2 py-1.5 font-mono text-[10px] text-foreground">
+          <div className="font-semibold text-accent">
+            {hoveredForecast.symbol} · {formatEnumLabel(hoveredForecast.forecast_category)}
+          </div>
+          <div className="text-muted">ID: {hoveredForecast.forecast_id.slice(0, 12)}…</div>
+          <div className="text-muted">Created: {formatExchangeTimestamp(hoveredForecast.created_at)}</div>
+          <div className="text-muted">As-of: {formatExchangeTimestamp(hoveredForecast.market_as_of)}</div>
+          <div className="text-muted">Horizon: {hoveredForecast.forecast_horizon_bars} bars</div>
+          <div>State: {formatEnumLabel(hoveredForecast.status)}</div>
+          {hoveredForecast.forecast_value && <div>Value: {formatEnumLabel(hoveredForecast.forecast_value)}</div>}
         </div>
       )}
     </div>

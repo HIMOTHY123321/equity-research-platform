@@ -181,5 +181,14 @@ def resolve(
     outcome = resolve_forecast(
         forecast, market_provider, evidence_repository, news_repository=news_repository
     )
-    forecast_repository.save_outcome(outcome)
+    # INSUFFICIENT_FUTURE_DATA is never persisted (Phase 12.1): save_outcome
+    # is idempotent on first write (#F -- a forecast can only ever have one
+    # outcome), so recording a too-early "not enough data yet" attempt would
+    # permanently lock the forecast out of ever resolving once its horizon
+    # genuinely does close. Only a real, conclusive resolution is saved;
+    # an insufficient one is simply returned for display and re-attempted
+    # on the next call (manual RESOLVE click, or the background
+    # ForecastMonitor's next scan).
+    if outcome.outcome.value != "insufficient_future_data":
+        forecast_repository.save_outcome(outcome)
     return outcome

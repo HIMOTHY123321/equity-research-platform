@@ -1,0 +1,192 @@
+"""Integration tests for Phase 12.1's WS /api/live/stream and GET
+/api/live/status -- the real FastAPI app, real lifespan (so the actual
+process-wide LiveMarketService/RecomputationEngine/ForecastMonitor/
+NewsMonitor singletons run), with a fast, fully-controllable fake
+MarketDataProvider injected via app.dependency_overrides (lifespan itself
+respects overrides -- see app.main.lifespan).
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.deps import get_market_data_provider, get_news_provider
+from app.live.config import LiveConfig
+from app.main import app
+from app.market_data.capabilities import ProviderCapabilities
+from app.market_data.exceptions import ProviderError
+from app.market_data.provider import MarketDataProvider
+from app.news.fixture_provider import FixtureNewsProvider
+from app.schemas.market_data import MarketSession, PreviousClose, Quote
+
+_BASE = datetime.now(timezone.utc)
+
+_FAST_CONFIG = LiveConfig(
+    target_interval_seconds=0.02,
+    heartbeat_interval_seconds=0.1,
+    reconnect_initial_backoff_seconds=0.02,
+    reconnect_max_backoff_seconds=0.05,
+    forecast_monitor_interval_seconds=3600,  # not exercised by these tests
+    news_monitor_interval_seconds=3600,
+)
+
+
+class _QueueProvider(MarketDataProvider):
+    """Returns a fresh, monotonically-timestamped quote every call --
+    fast and fully deterministic, no real network I/O."""
+
+    def __init__(self):
+        self._tick = 0
+        self.raise_next = False
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ProviderCapabilities(
+            real_time_quotes=True,
+            streaming_quotes=False,
+            streaming_trades=False,
+            streaming_bars=False,
+            streaming_news=False,
+            historical_intraday=True,
+            quote_delay_seconds=0.05,
+            min_poll_interval_seconds=0.02,
+        )
+
+    def get_candles(self, symbol, timeframe, limit=200):
+        return []
+
+    def get_latest_quote(self, symbol):
+        if self.raise_next:
+            self.raise_next = False
+            raise ProviderError("simulated outage")
+        self._tick += 1
+        ts = _BASE + timedelta(milliseconds=self._tick)
+        price = 100.0 + self._tick
+        return Quote(
+            symbol=symbol,
+            timestamp=ts,
+            session=MarketSession.REGULAR,
+            bid_price=price,
+            bid_size=0.0,
+            ask_price=price,
+            ask_size=0.0,
+            is_approximate=False,
+        )
+
+    def get_previous_close(self, symbol):
+        return PreviousClose(symbol=symbol, trading_date=_BASE.date(), close=100.0, volume=1_000_000)
+
+
+@pytest.fixture
+def client():
+    provider = _QueueProvider()
+    app.dependency_overrides[get_market_data_provider] = lambda: provider
+    app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
+    app.state.live_config = _FAST_CONFIG
+    with TestClient(app) as test_client:
+        yield test_client, provider
+    app.dependency_overrides.clear()
+    if hasattr(app.state, "live_config"):
+        del app.state.live_config
+
+
+def test_status_endpoint_reports_provider_capabilities(client):
+    test_client, _provider = client
+    response = test_client.get("/api/live/status")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["capabilities"]["streaming_quotes"] is False
+    assert "connection_status" in body
+
+
+def test_subscribing_receives_a_connection_status_then_a_quote(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        frames = [ws.receive_json() for _ in range(3)]
+        types_seen = {f["type"] for f in frames}
+        assert "connection_status" in types_seen
+        assert "quote" in types_seen
+        quote_frame = next(f for f in frames if f["type"] == "quote")
+        assert quote_frame["symbol"] == "SPY"
+        assert quote_frame["quote"]["price"] > 0
+
+
+def test_a_forming_candle_frame_follows_the_quote(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        frames = [ws.receive_json() for _ in range(4)]
+        assert any(f["type"] == "forming_candle" for f in frames)
+
+
+def test_a_new_connection_receives_the_current_connection_status_immediately(client):
+    # Regression guard: connection_status events are only published on a
+    # *transition* (LiveMarketService._set_connection_state) -- a brand-new
+    # connection made while the service is already CONNECTED from an
+    # earlier subscriber must still learn the current state right away,
+    # not sit on a client-side default of DISCONNECTED forever.
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws1:
+        ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        first = ws1.receive_json()
+        assert first["type"] == "connection_status"
+        # Wait for the underlying poll loop to actually succeed once, so
+        # the service's own connection_state has genuinely transitioned to
+        # CONNECTED before the second connection opens.
+        for _ in range(5):
+            frame = ws1.receive_json()
+            if frame["type"] == "connection_status" and frame["status"]["state"] == "connected":
+                break
+
+        with test_client.websocket_connect("/api/live/stream") as ws2:
+            snapshot = ws2.receive_json()
+            assert snapshot["type"] == "connection_status"
+            assert snapshot["status"]["state"] == "connected"
+
+
+def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws1:
+        ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        ws1.receive_json()
+        with test_client.websocket_connect("/api/live/stream") as ws2:
+            ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+            ws2.receive_json()
+            assert len(app.state.live_service._tasks) == 1
+
+
+def test_unrecognized_action_returns_an_error_frame_not_a_crash(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        ws.receive_json()  # initial connection_status snapshot
+        ws.send_json({"action": "bogus"})
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+
+
+def test_malformed_subscribe_message_returns_an_error_frame(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        ws.receive_json()  # initial connection_status snapshot
+        ws.send_json({"action": "subscribe"})  # missing required "symbol"
+        frame = ws.receive_json()
+        assert frame["type"] == "error"
+
+
+def test_heartbeat_frames_arrive_on_the_configured_interval(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        frames = [ws.receive_json() for _ in range(3)]
+        assert any(f["type"] == "heartbeat" for f in frames)
+
+
+def test_disconnect_cleans_up_the_subscription(client):
+    test_client, _provider = client
+    with test_client.websocket_connect("/api/live/stream") as ws:
+        ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        ws.receive_json()
+    status = test_client.get("/api/live/status").json()
+    assert "SPY" not in status["connection_status"]["subscribed_symbols"]

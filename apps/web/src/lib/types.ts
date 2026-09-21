@@ -1457,3 +1457,91 @@ export interface ForwardValidationGateEvaluation {
   max_time_bucket_share: number | null;
   criteria: Record<string, number>;
 }
+
+// ---- Automatic Live Data & Event-Driven Updates (Phase 12.1) --------------
+//
+// Every live value carries its own freshness envelope -- there is no live
+// number anywhere in this UI that isn't traceable back to exactly when it
+// was actually observed. `provider`/`freshness_state` must always be shown
+// alongside a live value; never a bare price with no provenance.
+
+export type FreshnessStateKind = "live" | "recent" | "delayed" | "stale" | "disconnected" | "unavailable" | "market_closed";
+
+export type LiveSessionStateKind = "pre_market" | "regular" | "after_hours" | "market_closed";
+
+export interface FreshnessInfo {
+  source_timestamp: string | null;
+  received_at: string;
+  age_seconds: number | null;
+  provider: string;
+  market_session: LiveSessionStateKind;
+  freshness_state: FreshnessStateKind;
+}
+
+export interface LiveQuote {
+  symbol: string;
+  price: number;
+  bid: number;
+  ask: number;
+  spread: number;
+  is_approximate: boolean;
+  previous_close: number | null;
+  percent_change: number | null;
+  freshness: FreshnessInfo;
+}
+
+export type CandleStateKind = "forming" | "completed";
+
+export interface LiveCandle {
+  symbol: string;
+  timeframe: string;
+  timestamp: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  state: CandleStateKind;
+  freshness: FreshnessInfo;
+}
+
+export type ConnectionStateKind = "connected" | "resyncing" | "disconnected";
+
+export interface LiveConnectionStatus {
+  state: ConnectionStateKind;
+  last_message_at: string | null;
+  reconnect_attempts: number;
+  subscribed_symbols: string[];
+}
+
+export interface LiveProviderCapabilities {
+  real_time_quotes: boolean;
+  streaming_quotes: boolean;
+  streaming_trades: boolean;
+  streaming_bars: boolean;
+  streaming_news: boolean;
+  historical_intraday: boolean;
+  quote_delay_seconds: number | null;
+  news_delay_seconds: number | null;
+  min_poll_interval_seconds: number;
+}
+
+export interface LiveStatusResponse {
+  capabilities: LiveProviderCapabilities;
+  connection_status: LiveConnectionStatus;
+}
+
+export type LiveSubscriptionPriority = "viewed" | "active_forecast" | "watchlist" | "background_benchmark";
+
+// The closed set of server->client frame shapes (app.api.routes.live
+// ._event_to_frame) -- one discriminated union, never an untyped dict.
+export type LiveServerFrame =
+  | { type: "quote"; symbol: string; quote: LiveQuote }
+  | { type: "forming_candle"; symbol: string; candle: LiveCandle }
+  | { type: "completed_candle"; symbol: string; candle: LiveCandle }
+  | { type: "connection_status"; status: LiveConnectionStatus }
+  | { type: "snapshot_refreshed"; symbol: string; timeframe: string; refreshed_at: string }
+  | { type: "forecast_resolved"; forecast_id: string; symbol: string; outcome: ForecastOutcome }
+  | { type: "catalyst_event"; symbol: string; new_article_count: number; detected_at: string }
+  | { type: "heartbeat" }
+  | { type: "error"; detail: string };

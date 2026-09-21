@@ -17,6 +17,7 @@ import httpx
 
 from app.config import Settings, get_settings
 from app.market_data.aggregation import aggregate_hourly_to_4h
+from app.market_data.capabilities import ALPACA_CAPABILITIES, ProviderCapabilities
 from app.market_data.exceptions import (
     AuthenticationError,
     InvalidSymbolError,
@@ -68,6 +69,9 @@ class AlpacaMarketDataProvider(MarketDataProvider):
         self._client.close()
 
     # ---- MarketDataProvider interface --------------------------------------
+
+    def capabilities(self) -> ProviderCapabilities:
+        return ALPACA_CAPABILITIES
 
     def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
         if timeframe == Timeframe.FOUR_HOUR:

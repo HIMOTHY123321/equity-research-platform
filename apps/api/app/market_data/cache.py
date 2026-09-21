@@ -17,6 +17,14 @@ class Cache(ABC):
     @abstractmethod
     def set(self, key: str, value: Any, ttl_seconds: float) -> None: ...
 
+    @abstractmethod
+    def delete_prefix(self, prefix: str) -> None:
+        """Drop every cached entry whose key starts with `prefix` (Phase
+        12.1 #H: a completed-candle event must be able to force the next
+        get_candles() call to see fresh data immediately, rather than
+        waiting out whatever TTL happened to be in flight -- `limit` varies
+        per caller so a single exact key can't be relied on)."""
+
 
 class InMemoryCache(Cache):
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
@@ -35,6 +43,10 @@ class InMemoryCache(Cache):
 
     def set(self, key: str, value: Any, ttl_seconds: float) -> None:
         self._store[key] = (self._clock() + ttl_seconds, value)
+
+    def delete_prefix(self, prefix: str) -> None:
+        for key in [k for k in self._store if k.startswith(prefix)]:
+            del self._store[key]
 
     def clear(self) -> None:
         self._store.clear()

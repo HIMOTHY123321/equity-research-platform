@@ -153,3 +153,27 @@ def test_performance_and_gate_endpoints_respond_with_no_data(client):
 def test_resolve_unknown_forecast_returns_404(client):
     response = client.post("/api/forecasts/does-not-exist/resolve")
     assert response.status_code == 404
+
+
+def test_an_insufficient_future_data_resolution_is_never_persisted_permanently(client):
+    # Regression guard (Phase 12.1): resolving a forecast the instant it's
+    # created can only ever see zero future candles -- that must be
+    # re-attemptable later, never a permanent lock-in. save_outcome is
+    # idempotent on first write, so persisting INSUFFICIENT_FUTURE_DATA
+    # would otherwise make a forecast unresolvable forever, even once its
+    # horizon genuinely closes.
+    _seed_research(client)
+    created = client.post(
+        "/api/forecasts",
+        json={"symbol": "SPY", "timeframe": "1h", "forecast_category": "volatility", "horizon_bars": 5},
+    ).json()
+
+    first = client.post(f"/api/forecasts/{created['forecast_id']}/resolve")
+    assert first.status_code == 200
+    assert first.json()["outcome"] == "insufficient_future_data"
+
+    second = client.post(f"/api/forecasts/{created['forecast_id']}/resolve")
+    assert second.status_code == 200
+    # A fresh attempt, not a cached/persisted row from the first call --
+    # proven by a different outcome_id (each resolve() call mints a new one).
+    assert second.json()["outcome_id"] != first.json()["outcome_id"]

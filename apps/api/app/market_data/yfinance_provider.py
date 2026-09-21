@@ -32,6 +32,7 @@ import yfinance as yf
 from yfinance.exceptions import YFException, YFRateLimitError
 
 from app.market_data.aggregation import aggregate_hourly_to_4h
+from app.market_data.capabilities import YFINANCE_CAPABILITIES, ProviderCapabilities
 from app.market_data.exceptions import InvalidSymbolError, ProviderError, RateLimitError
 from app.market_data.normalization import normalize_yfinance_bars
 from app.market_data.provider import MarketDataProvider
@@ -73,6 +74,9 @@ class YFinanceMarketDataProvider(MarketDataProvider):
         self._max_retries = max_retries
 
     # ---- MarketDataProvider interface --------------------------------------
+
+    def capabilities(self) -> ProviderCapabilities:
+        return YFINANCE_CAPABILITIES
 
     def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
         if timeframe == Timeframe.FOUR_HOUR:
