@@ -123,7 +123,25 @@ def live_status(request: Request) -> dict:
             "news_delay_seconds": capabilities.news_delay_seconds,
             "min_poll_interval_seconds": capabilities.min_poll_interval_seconds,
         },
+        # (Phase 12.2 §O) truthful, not "WebSocket transport used therefore
+        # real-time" -- False whenever no streaming provider is actually
+        # configured/available, in which case connection_status still
+        # reflects the Phase 12.1 poll loop.
+        "streaming_active": live_service.is_streaming(),
         "connection_status": live_service.connection_status().model_dump(mode="json"),
+        "latency": [
+            {
+                "event_type": entry.event_type,
+                "symbol": entry.symbol,
+                "provider": entry.provider,
+                "count": entry.count,
+                "median_seconds": entry.median_seconds,
+                "p95_seconds": entry.p95_seconds,
+                "p99_seconds": entry.p99_seconds,
+                "max_seconds": entry.max_seconds,
+            }
+            for entry in live_service.latency_summary()
+        ],
     }
 
 

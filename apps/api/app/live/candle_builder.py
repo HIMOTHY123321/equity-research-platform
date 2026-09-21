@@ -84,3 +84,50 @@ def fold_price_into_candle(
         state=CandleState.FORMING,
         freshness=freshness,
     )
+
+
+def fold_aggregate_into_candle(
+    existing: LiveCandle | None,
+    *,
+    symbol: str,
+    timeframe: Timeframe,
+    bucket_open: datetime,
+    open_: float,
+    high: float,
+    low: float,
+    close: float,
+    volume: float,
+    freshness,
+) -> LiveCandle:
+    """Phase 12.2 (#H): fold one real per-second OHLCV aggregate into the
+    forming bar for `bucket_open` -- unlike fold_price_into_candle (a single
+    quote sample with volume=0.0), this carries genuine trade volume and a
+    genuine O/H/L/C for the second just observed. Still purely a display
+    projection: only a real higher-timeframe boundary crossing (the caller's
+    responsibility, exactly as in fold_price_into_candle) ever marks a bar
+    COMPLETED."""
+    if existing is None or existing.timestamp != bucket_open:
+        return LiveCandle(
+            symbol=symbol,
+            timeframe=timeframe.value,
+            timestamp=bucket_open,
+            open=open_,
+            high=high,
+            low=low,
+            close=close,
+            volume=volume,
+            state=CandleState.FORMING,
+            freshness=freshness,
+        )
+    return LiveCandle(
+        symbol=symbol,
+        timeframe=timeframe.value,
+        timestamp=bucket_open,
+        open=existing.open,
+        high=max(existing.high, high),
+        low=min(existing.low, low),
+        close=close,
+        volume=existing.volume + volume,
+        state=CandleState.FORMING,
+        freshness=freshness,
+    )

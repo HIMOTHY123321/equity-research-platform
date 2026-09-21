@@ -11,12 +11,13 @@ directly.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from app.config import get_settings
 from app.market_data.alpaca_provider import AlpacaMarketDataProvider
 from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
+from app.market_data.massive_provider import MassiveMarketDataProvider
 from app.market_data.provider import MarketDataProvider
 from app.market_data.yfinance_provider import YFinanceMarketDataProvider
 from app.news.fixture_provider import FixtureNewsProvider
@@ -26,6 +27,7 @@ from app.watchlist.repository import InMemoryWatchlistRepository, WatchlistRepos
 
 if TYPE_CHECKING:
     from app.ai_analysis.provider import AIAnalysisProvider
+    from app.live.streaming import StreamingMarketDataProvider
 
 
 @lru_cache
@@ -48,14 +50,35 @@ def _build_inner_provider() -> MarketDataProvider:
         return AlpacaMarketDataProvider()
     if provider_name == "yfinance":
         return YFinanceMarketDataProvider()
+    if provider_name == "massive":
+        return MassiveMarketDataProvider()
     raise ValueError(
-        f"Unknown MARKET_DATA_PROVIDER {provider_name!r}; expected 'yfinance' or 'alpaca'"
+        f"Unknown MARKET_DATA_PROVIDER {provider_name!r}; expected 'yfinance', 'alpaca', or 'massive'"
     )
 
 
 @lru_cache
 def get_market_data_provider() -> MarketDataProvider:
     return CachedMarketDataProvider(_build_inner_provider(), _shared_cache())
+
+
+@lru_cache
+def get_streaming_provider() -> "Optional[StreamingMarketDataProvider]":
+    """Phase 12.2 (§C): None whenever push streaming isn't actually
+    configured/available -- LiveMarketService must keep working via its
+    existing per-symbol poll loop in that case, exactly as Phase 12.1 did.
+    Never required for tests or app startup; only meaningful when
+    MARKET_DATA_PROVIDER=massive and MASSIVE_API_KEY is set.
+
+    Import of MassiveStreamingProvider is local (not module-level): it pulls
+    in the `websockets` package only when actually needed, so a deployment
+    that never sets MARKET_DATA_PROVIDER=massive never pays for it."""
+    settings = get_settings()
+    if settings.market_data_provider.lower() != "massive" or not settings.massive_api_key:
+        return None
+    from app.market_data.massive_streaming import MassiveStreamingProvider
+
+    return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
 
 
 @lru_cache

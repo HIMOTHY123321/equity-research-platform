@@ -29,8 +29,11 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./ai_market_desk.db"
 
     # Market data provider selection: "yfinance" (default -- no account/key
-    # needed, research/development only) or "alpaca" (requires an eligible
-    # account holder's API credentials below). Never hard-code a choice
+    # needed, research/development only), "alpaca" (requires an eligible
+    # account holder's API credentials below), or "massive" (Phase 12.2 --
+    # requires massive_api_key below; the only provider in this codebase
+    # that genuinely pushes trades/quotes/aggregates over a persistent
+    # WebSocket rather than being polled). Never hard-code a choice
     # elsewhere in the codebase -- always branch on this setting.
     market_data_provider: str = "yfinance"
 
@@ -47,6 +50,18 @@ class Settings(BaseSettings):
     alpaca_api_secret_key: str = ""
     alpaca_data_base_url: str = "https://data.alpaca.markets"
     alpaca_paper: bool = True
+
+    # Massive Market Data (Phase 12.2, only used when
+    # MARKET_DATA_PROVIDER=massive). A missing key is never an error: the
+    # app still starts, REST calls simply fail with AuthenticationError
+    # (surfaced the same as any other provider outage), and
+    # app.api.deps.get_streaming_provider() returns None so
+    # LiveMarketService falls back to its existing per-symbol poll loop --
+    # see docs/decisions/0018-streaming-market-data-provider.md. The key is
+    # never sent to the browser; only this backend process ever holds it.
+    massive_api_key: str = ""
+    massive_rest_base_url: str = "https://api.massive.com"
+    massive_ws_url: str = "wss://socket.massive.com/stocks"
 
     # OpenAI
     openai_api_key: str = ""

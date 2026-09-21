@@ -9,7 +9,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api.deps import get_market_data_provider, get_news_provider, get_shared_market_data_cache
+from app.api.deps import (
+    get_market_data_provider,
+    get_news_provider,
+    get_shared_market_data_cache,
+    get_streaming_provider,
+)
 from app.api.routes import (
     analysis,
     forecasts,
@@ -72,11 +77,19 @@ async def lifespan(app: FastAPI):
     # engines instead of always hitting the real configured one.
     market_provider = app.dependency_overrides.get(get_market_data_provider, get_market_data_provider)()
     news_provider = app.dependency_overrides.get(get_news_provider, get_news_provider)()
+    # Phase 12.2: None whenever push streaming isn't actually configured
+    # (no MASSIVE_API_KEY, or MARKET_DATA_PROVIDER != "massive") --
+    # LiveMarketService transparently falls back to its Phase 12.1
+    # per-symbol poll loop in that case.
+    streaming_provider = app.dependency_overrides.get(get_streaming_provider, get_streaming_provider)()
     cache = get_shared_market_data_cache()
     live_config = getattr(app.state, "live_config", DEFAULT_LIVE_CONFIG)
 
     live_service = LiveMarketService(
-        market_provider, provider_name=settings.market_data_provider, config=live_config
+        market_provider,
+        provider_name=settings.market_data_provider,
+        config=live_config,
+        streaming_provider=streaming_provider,
     )
     recompute_engine = RecomputationEngine(live_service, market_provider, cache)
     forecast_monitor = ForecastMonitor(SessionLocal, market_provider, news_provider, config=live_config)

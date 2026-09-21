@@ -1478,6 +1478,11 @@ export interface FreshnessInfo {
   freshness_state: FreshnessStateKind;
 }
 
+// Phase 12.2 (#G): `price` is the real last-trade price once any trade has
+// been observed for a symbol -- never a bid/ask midpoint substituted for
+// it. `bid`/`ask` are the NBBO quote, timestamped independently via
+// `nbbo_timestamp` since a trade and its NBBO can genuinely arrive with
+// different source timestamps.
 export interface LiveQuote {
   symbol: string;
   price: number;
@@ -1487,6 +1492,11 @@ export interface LiveQuote {
   is_approximate: boolean;
   previous_close: number | null;
   percent_change: number | null;
+  last_trade_price?: number | null;
+  last_trade_size?: number | null;
+  last_trade_timestamp?: string | null;
+  last_trade_exchange?: number | null;
+  nbbo_timestamp?: string | null;
   freshness: FreshnessInfo;
 }
 

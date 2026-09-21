@@ -75,3 +75,25 @@ ALPACA_CAPABILITIES = ProviderCapabilities(
     news_delay_seconds=None,
     min_poll_interval_seconds=1.0,
 )
+
+# Phase 12.2: Massive (massive.com) genuinely pushes trades/NBBO
+# quotes/per-second aggregates over a persistent WebSocket -- unlike
+# yfinance/Alpaca above, this is a real streaming_* claim, not aspirational.
+# quote_delay_seconds is still left unset (None): Massive's SIP timestamp
+# lets us *measure* transport latency per message (app.live.latency), which
+# is more honest than repeating a vendor-stated number we haven't verified
+# ourselves. min_poll_interval_seconds only governs this implementation's
+# REST fallback path (get_candles/get_previous_close, and quote polling if
+# no MASSIVE_API_KEY streaming access is actually available) -- see
+# app.market_data.massive_provider.
+MASSIVE_CAPABILITIES = ProviderCapabilities(
+    real_time_quotes=True,
+    streaming_quotes=True,
+    streaming_trades=True,
+    streaming_bars=True,
+    streaming_news=False,
+    historical_intraday=True,
+    quote_delay_seconds=None,
+    news_delay_seconds=None,
+    min_poll_interval_seconds=1.0,
+)

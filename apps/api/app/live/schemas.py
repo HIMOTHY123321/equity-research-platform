@@ -27,6 +27,14 @@ class FreshnessInfo(BaseModel):
 
 
 class LiveQuote(BaseModel):
+    """(#G, Phase 12.2) `price` is the authoritative last-trade price once any
+    real trade has been observed (never a midpoint substituted for it) --
+    for a provider with no trade feed (yfinance) it falls back to a bid/mid
+    approximation, exactly as before. `bid`/`ask`/`spread` are always the
+    NBBO quote, tracked and timestamped independently of the last trade via
+    `nbbo_timestamp` -- a trade and its NBBO can genuinely arrive with
+    different source timestamps and must never be conflated into one."""
+
     model_config = ConfigDict(frozen=True)
 
     symbol: str
@@ -37,6 +45,11 @@ class LiveQuote(BaseModel):
     is_approximate: bool
     previous_close: Optional[float] = None
     percent_change: Optional[float] = None
+    last_trade_price: Optional[float] = None
+    last_trade_size: Optional[float] = None
+    last_trade_timestamp: Optional[datetime] = None
+    last_trade_exchange: Optional[int] = None
+    nbbo_timestamp: Optional[datetime] = None
     freshness: FreshnessInfo
 
 
