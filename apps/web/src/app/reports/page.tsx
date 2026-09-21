@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 
 import { TopNav } from "@/components/TopNav";
 import { listRecentBriefs } from "@/lib/api";
-import { formatEnumLabel, formatExchangeTimestamp } from "@/lib/format";
+import { formatAiProviderLabel, formatEnumLabel, formatExchangeTimestamp } from "@/lib/format";
 import type { BriefListItem } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
@@ -75,7 +75,7 @@ export default function ReportsPage() {
                       <td className="px-3 py-2 text-muted">{formatExchangeTimestamp(item.generated_at)}</td>
                       <td className="px-3 py-2 text-muted">{formatExchangeTimestamp(item.as_of)}</td>
                       <td className="px-3 py-2 text-muted">
-                        {item.provider}
+                        {formatAiProviderLabel(item.provider)}
                         {item.model ? ` · ${item.model}` : ""}
                       </td>
                       <td className="px-3 py-2 text-muted">{item.prompt_version}</td>

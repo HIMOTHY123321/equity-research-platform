@@ -35,6 +35,7 @@ from app.research_intelligence.analogs import (
     attach_outcomes,
     detection_close_for,
     diverse_analogs,
+    diversity_unavailable_reason,
     extract_features,
     rank_analogs,
 )
@@ -385,6 +386,11 @@ class AnalogQueryResponse(BaseModel):
     diversity: AnalogDiversityReport
     diverse_analogs: list[AnalogResult]
     catalyst_context_applied: bool = False
+    # Hardening pass (§T): set only when the corpus itself can't support a
+    # genuinely cross-symbol-diverse result (e.g. a single-symbol research
+    # corpus) -- the UI must show this instead of silently presenting a
+    # "diverse" list that's still concentrated in one symbol/episode.
+    diversity_unavailable_reason: Optional[str] = None
 
 
 @router.post("/analogs", response_model=AnalogQueryResponse)
@@ -466,6 +472,7 @@ def compute_analog_query_response(
         diversity=diversity,
         diverse_analogs=diverse,
         catalyst_context_applied=body.include_catalyst_context,
+        diversity_unavailable_reason=diversity_unavailable_reason(decorated),
     )
 
 

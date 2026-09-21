@@ -4,10 +4,12 @@ import { useState } from "react";
 
 import {
   formatCatalystContextLabel,
-  formatClockTime,
   formatEvidenceMaturity,
+  formatEvidenceRef,
+  formatExchangeTimestamp,
   formatPrice,
   formatSetupType,
+  isExchangeMidnight,
 } from "@/lib/format";
 import type { EvidencePacket, ResearchBrief } from "@/lib/types";
 
@@ -25,8 +27,11 @@ function RefChips({ refs }: { refs: string[] }) {
   return (
     <p className="flex flex-wrap gap-1">
       {refs.map((ref) => (
-        <span key={ref} className="rounded bg-border px-1 py-0.5 font-mono text-[9px] text-muted">
-          {ref}
+        // (§AE) A readable label is the primary presentation; the raw ref
+        // string stays available via `title` for developer inspection,
+        // never the other way around.
+        <span key={ref} title={ref} className="rounded bg-border px-1 py-0.5 font-mono text-[9px] text-muted">
+          {formatEvidenceRef(ref)}
         </span>
       ))}
     </p>
@@ -48,29 +53,44 @@ export function EvidenceAuditTrail({ packet, brief }: { packet: EvidencePacket; 
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h5 className="text-[10px] font-semibold tracking-wide text-muted">EVIDENCE AUDIT TRAIL</h5>
         <span
+          title="A LIVE SNAPSHOT is still frozen once created -- 'live' describes when it was taken, never that it can change afterward."
           className={`rounded px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${
             packet.mode === "live" ? "bg-accent/15 text-accent" : "bg-warning/15 text-warning"
           }`}
         >
-          {packet.mode === "live" ? "LIVE" : "HISTORICAL SNAPSHOT"}
+          {packet.mode === "live" ? "LIVE SNAPSHOT" : "HISTORICAL SNAPSHOT"}
         </span>
       </div>
 
       <Section title="PACKET ID / AS OF / PIPELINE VERSION">
         <p className="font-mono text-[10px]">{packet.packet_id}</p>
         <p>
-          As of {formatClockTime(packet.as_of)} on {new Date(packet.as_of).toLocaleDateString()} ·
-          Pipeline v{packet.pipeline_version} · Schema v{packet.schema_version}
+          As of {formatExchangeTimestamp(packet.as_of)} · Pipeline v{packet.pipeline_version} · Schema v
+          {packet.schema_version}
         </p>
       </Section>
 
       <Section title="MARKET DATA / NEWS / RESEARCH CUTOFFS">
-        <p>Market data: {packet.market_data_cutoff ? formatClockTime(packet.market_data_cutoff) : "unavailable"}</p>
-        <p>News: {packet.news_cutoff ? formatClockTime(packet.news_cutoff) : "not included"}</p>
+        <p>
+          Market data:{" "}
+          {packet.market_data_cutoff ? formatExchangeTimestamp(packet.market_data_cutoff) : "unavailable"}
+        </p>
+        <p>News: {packet.news_cutoff ? formatExchangeTimestamp(packet.news_cutoff) : "not included"}</p>
         <p>
           Research snapshot:{" "}
-          {packet.research_snapshot_cutoff ? formatClockTime(packet.research_snapshot_cutoff) : "no runs available"}
+          {packet.research_snapshot_cutoff
+            ? formatExchangeTimestamp(packet.research_snapshot_cutoff)
+            : "no runs available"}
         </p>
+        {/* (§AC) A midnight market-data cutoff is real, not a bug -- it
+            means this packet used completed 1D bars (the daily bar's own
+            timestamp is midnight exchange time), explained rather than
+            left for the user to puzzle over. */}
+        {packet.market_data_cutoff && isExchangeMidnight(packet.market_data_cutoff) && (
+          <p className="text-muted">
+            (Midnight reflects a completed daily bar&apos;s own timestamp, not an incomplete cutoff.)
+          </p>
+        )}
       </Section>
 
       {packet.setup && (
@@ -120,7 +140,9 @@ export function EvidenceAuditTrail({ packet, brief }: { packet: EvidencePacket; 
             <p>Evidence maturity: {formatEvidenceMaturity(packet.historical_research.independence.evidence_maturity)}</p>
           </>
         ) : (
-          <p className="text-muted">No historical research available for this as_of.</p>
+          <p className="text-muted">
+            Formal statistical research unavailable for this as_of (independent of analog search below).
+          </p>
         )}
       </Section>
 

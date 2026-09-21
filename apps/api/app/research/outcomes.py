@@ -184,6 +184,25 @@ def evaluate_setup_outcome(
     horizons = compute_horizon_outcomes(
         future_candles, base_price, candidate.direction, config.forward_horizons
     )
+    # Hardening pass (§AF) data-integrity audit: MFE/MAE deliberately search
+    # the *entire* remaining `future_candles` window (every future bar this
+    # candle series actually contains), not `max(config.forward_horizons)`.
+    # This was confirmed, not a bug -- a setup detected near the start of a
+    # long backtest replay can therefore show an MAE many multiples of its
+    # entry-time ATR (e.g. "-47 ATR"), because price genuinely moved that
+    # far against it at SOME point across the whole remaining series, not
+    # within any realistic trading horizon. `atr` is also frozen at
+    # detection time (never recomputed as price moves), so a thin-volatility
+    # entry combined with a large later move compounds this further. Both
+    # are legitimate reads of the real candle data, not a normalization bug
+    # or bad tick -- verified by inspecting the excursion's own `timestamp`/
+    # `bars_until`, which point at a real, dateable candle in the fixture,
+    # not an out-of-range or corrupted index. This is surfaced to the user
+    # (app/research/ResearchResultsPanel.tsx caption) rather than silently
+    # capped, per this phase's explicit instruction not to hide extreme
+    # values -- bounding this to the horizon window would be a legitimate
+    # methodology change but is out of scope for a documentation-only pass
+    # (excursion values already feed Research Lab statistics tests).
     mfe = compute_excursion(future_candles, base_price, candidate.direction, atr, favorable=True)
     mae = compute_excursion(future_candles, base_price, candidate.direction, atr, favorable=False)
     structural_events = compute_structural_events(candidate, future_candles, config)

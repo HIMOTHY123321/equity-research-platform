@@ -1,12 +1,17 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { EvidenceAuditTrail } from "@/components/EvidenceAuditTrail";
 import { ApiError, getEvidencePacket, postResearchBrief } from "@/lib/api";
+import { formatAiProviderLabel } from "@/lib/format";
 import type { AnalysisMode, EvidencePacket, ResearchBrief, SetupCandidate } from "@/lib/types";
 
 type Status = "idle" | "loading" | "loaded" | "failed";
+
+// Honest, conservative "evidence may have moved on" threshold -- see the
+// useEffect below for the full rationale.
+const STALE_SESSION_MS = 5 * 60 * 1000;
 
 const MODES: { value: AnalysisMode; label: string }[] = [
   { value: "quick", label: "QUICK" },
@@ -49,6 +54,17 @@ function ListBlock({ title, items, itemClassName }: { title: string; items: stri
  * panel only ever renders a server-validated ResearchBrief and the packet
  * it was grounded against. Click-to-load, same discipline as
  * CatalystContextCard/AnalogSearchButton -- no always-on network call.
+ *
+ * Hardening pass (§V): opening this panel freezes exactly ONE EvidencePacket
+ * -- its `as_of` is pinned in `frozenAsOf` and passed explicitly on every
+ * subsequent mode switch. build_evidence_packet is deterministic for a
+ * given (symbol, timeframe, setup_id, as_of), so reusing the same as_of
+ * reproduces the exact same packet_id/content; switching QUICK/FULL/WHY_
+ * THIS_SETUP/WHY_NOT/CATALYST/ANALOGS only changes synthesis/presentation,
+ * never the underlying evidence. Background market movement never mutates
+ * an open session -- "NEW EVIDENCE AVAILABLE" only ever offers a fresh
+ * snapshot via an explicit, separate packet (§V "new packet, old one
+ * preserved").
  */
 export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidate }) {
   const [status, setStatus] = useState<Status>("idle");
@@ -57,8 +73,11 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
   const [packet, setPacket] = useState<EvidencePacket | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showPacket, setShowPacket] = useState(false);
+  const [frozenAsOf, setFrozenAsOf] = useState<string | null>(null);
+  const [openedAt, setOpenedAt] = useState<number | null>(null);
+  const [newEvidenceAvailable, setNewEvidenceAvailable] = useState(false);
 
-  async function loadMode(nextMode: AnalysisMode) {
+  async function loadMode(nextMode: AnalysisMode, asOf: string) {
     setMode(nextMode);
     setStatus("loading");
     setError(null);
@@ -69,8 +88,14 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
           timeframe: candidate.timeframe,
           setupId: candidate.id,
           mode: nextMode,
+          asOf,
         }),
-        getEvidencePacket({ symbol: candidate.symbol, timeframe: candidate.timeframe, setupId: candidate.id }),
+        getEvidencePacket({
+          symbol: candidate.symbol,
+          timeframe: candidate.timeframe,
+          setupId: candidate.id,
+          asOf,
+        }),
       ]);
       setBrief(briefResult);
       setPacket(packetResult);
@@ -81,16 +106,58 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
     }
   }
 
+  async function freezeAndLoad(nextMode: AnalysisMode) {
+    // The one and only place a fresh "now" is chosen -- every subsequent
+    // mode switch within this session reuses it (see loadMode above).
+    const asOf = new Date().toISOString();
+    setFrozenAsOf(asOf);
+    setOpenedAt(Date.now());
+    setNewEvidenceAvailable(false);
+    await loadMode(nextMode, asOf);
+  }
+
   async function toggle() {
     if (status === "loading") return;
     if (brief) {
       setBrief(null);
       setPacket(null);
+      setFrozenAsOf(null);
+      setOpenedAt(null);
+      setNewEvidenceAvailable(false);
       setStatus("idle");
       return;
     }
-    await loadMode(mode);
+    await freezeAndLoad(mode);
   }
+
+  function switchMode(nextMode: AnalysisMode) {
+    if (!frozenAsOf) return;
+    loadMode(nextMode, frozenAsOf);
+  }
+
+  async function newAnalysisSnapshot() {
+    // A deliberate, explicit new packet -- the old one (and any saved
+    // report generated from it) is never touched, only superseded in this
+    // panel's own view.
+    await freezeAndLoad(mode);
+  }
+
+  // Honest, conservative "evidence may have moved on" signal: once this
+  // session's frozen packet is more than one bar-length old (approximated
+  // as 5 minutes -- the finest interval this product currently supports),
+  // a genuinely newer completed bar/catalyst could plausibly exist. This
+  // never claims to know FOR CERTAIN that new evidence exists (that would
+  // require re-querying), only that enough time has passed that checking
+  // is worthwhile. Checked on an interval, never inline in render.
+  useEffect(() => {
+    if (!openedAt) return;
+    const check = () => {
+      if (Date.now() - openedAt > STALE_SESSION_MS) setNewEvidenceAvailable(true);
+    };
+    check();
+    const interval = setInterval(check, 15_000);
+    return () => clearInterval(interval);
+  }, [openedAt]);
 
   return (
     <div className="mt-2 border-t border-border pt-2">
@@ -110,7 +177,7 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
           <div className="flex flex-wrap items-center justify-between gap-2">
             <h5 className="text-[10px] font-semibold tracking-wide text-muted">AI RESEARCH ANALYST</h5>
             <span className="rounded bg-border px-1.5 py-0.5 text-[9px] uppercase text-muted">
-              {brief.provider}
+              {formatAiProviderLabel(brief.provider)}
               {brief.model ? ` · ${brief.model}` : ""}
             </span>
           </div>
@@ -120,7 +187,7 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
               <button
                 key={m.value}
                 type="button"
-                onClick={() => loadMode(m.value)}
+                onClick={() => switchMode(m.value)}
                 disabled={status === "loading"}
                 className={`rounded border px-1.5 py-0.5 font-mono text-[9px] disabled:opacity-50 ${
                   mode === m.value
@@ -132,6 +199,23 @@ export function AIResearchAnalystPanel({ candidate }: { candidate: SetupCandidat
               </button>
             ))}
           </div>
+
+          {newEvidenceAvailable && (
+            <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2 rounded border border-accent/40 bg-accent/10 px-2 py-1">
+              <span className="text-[10px] text-accent">
+                NEW EVIDENCE AVAILABLE -- this analysis is frozen as of{" "}
+                {frozenAsOf ? new Date(frozenAsOf).toLocaleTimeString() : ""}.
+              </span>
+              <button
+                type="button"
+                onClick={newAnalysisSnapshot}
+                disabled={status === "loading"}
+                className="rounded border border-accent px-1.5 py-0.5 font-mono text-[9px] text-accent disabled:opacity-50"
+              >
+                NEW ANALYSIS SNAPSHOT
+              </button>
+            </div>
+          )}
 
           {brief.grounding_rejected && (
             <p className="mt-2 text-[11px] text-warning">

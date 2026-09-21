@@ -11,9 +11,17 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.ai_analysis.evidence_packet import build_evidence_packet
 from app.ai_analysis.repository import SqlAlchemyEvidenceRepository
 from app.forecasting.repository import SqlAlchemyForecastRepository
-from app.forecasting.schemas import ForecastCategory, ForecastStatus
+from app.forecasting.schemas import (
+    EvidenceQualityState,
+    ForecastCategory,
+    ForecastOrigin,
+    ForecastStatus,
+    ForwardForecast,
+    StructureForecastValue,
+)
 from app.forecasting.service import create_forecast
 from app.live.forecast_monitor import ForecastMonitor
 from app.news.fixture_provider import FixtureNewsProvider
@@ -57,21 +65,57 @@ def _seed(factory) -> tuple:
 def _create_structure_forecast(
     research_repository, news_repository, evidence_repository, forecast_repository
 ):
+    """Builds a real packet from the fixture pipeline, then constructs the
+    ForwardForecast directly (ACTIVE) rather than via `create_forecast`'s
+    own deterministic generator -- the fixture's real research quality for
+    this candidate is WEAK_EVIDENCE, which `generate_structure_forecast`
+    now correctly abstains on (#J). These tests exist to exercise
+    ForecastMonitor's scan/resolve mechanics, not evidence-quality gating
+    at creation time (that's covered by tests/unit/forecasting/
+    test_deterministic.py), so an ACTIVE forecast is constructed directly,
+    same pattern as tests/unit/forecasting/test_resolver.py's structure
+    test."""
     candidate_id = some_candidate_id()
-    return create_forecast(
+    packet = build_evidence_packet(
         symbol="SPY",
         timeframe=Timeframe.ONE_HOUR,
-        forecast_category=ForecastCategory.STRUCTURE,
-        horizon_bars=100,
-        setup_id=candidate_id,
         market_provider=FakeMarketDataProvider(),
         news_provider=FixtureNewsProvider([]),
         news_repository=news_repository,
         research_repository=research_repository,
-        evidence_repository=evidence_repository,
-        forecast_repository=forecast_repository,
-        market_as_of=CREATION_AS_OF,
+        setup_id=candidate_id,
+        as_of=CREATION_AS_OF,
     )
+    evidence_repository.save_packet(packet)
+    assert packet.setup is not None
+    bullish = packet.setup.candidate.direction.value == "bullish"
+    sr = packet.support_resistance
+    zone = sr.nearest_resistance if bullish else sr.nearest_support
+    assert zone is not None, "fixture candidate must have a real zone on its own side to test against"
+
+    forecast = ForwardForecast(
+        forecast_id=f"structure-monitor-{candidate_id}",
+        created_at=CREATION_AS_OF,
+        market_as_of=CREATION_AS_OF,
+        symbol="SPY",
+        timeframe="1h",
+        forecast_category=ForecastCategory.STRUCTURE,
+        forecast_value=(
+            StructureForecastValue.RESISTANCE_BREAKS.value
+            if bullish
+            else StructureForecastValue.SUPPORT_FAILS.value
+        ),
+        forecast_horizon_bars=100,
+        zone_ref=zone.id,
+        evidence_packet_id=packet.packet_id,
+        evidence_packet_schema_version=packet.schema_version,
+        pipeline_version=packet.pipeline_version,
+        evidence_quality=EvidenceQualityState.MIXED_EVIDENCE,
+        origin=ForecastOrigin.DETERMINISTIC_RESEARCH,
+        status=ForecastStatus.ACTIVE,
+    )
+    forecast_repository.save_forecast(forecast)
+    return forecast
 
 
 def test_scan_resolves_a_forecast_whose_horizon_has_already_closed():

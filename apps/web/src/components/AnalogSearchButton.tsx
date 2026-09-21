@@ -48,6 +48,7 @@ export function AnalogSearchButton({
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
   const [diversity, setDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
+  const [diversityUnavailableReason, setDiversityUnavailableReason] = useState<string | null>(null);
   const [sampleFlags, setSampleFlags] = useState<EvidenceQualityFlagKind[]>([]);
 
   async function handleClick() {
@@ -69,6 +70,7 @@ export function AnalogSearchButton({
       setAnalogs(res.analogs);
       setDiversity(res.diversity);
       setDiverseAnalogs(res.diverse_analogs);
+      setDiversityUnavailableReason(res.diversity_unavailable_reason ?? null);
 
       // (#29) Best-effort only -- this same quick corpus's independence
       // flags for this exact setup type/direction, not a new research pass.
@@ -122,6 +124,8 @@ export function AnalogSearchButton({
             analogs={analogs}
             diversity={diversity ?? undefined}
             diverseAnalogs={diverseAnalogs ?? undefined}
+            diversityUnavailableReason={diversityUnavailableReason}
+            querySetupType={candidate.setup_type}
           />
         </div>
       )}

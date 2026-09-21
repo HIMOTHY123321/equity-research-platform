@@ -34,38 +34,111 @@ def build_deterministic_fallback_brief(
     """Every field here is either a claim statement (already deterministic,
     see app.ai_analysis.claims) or a direct packet field -- guaranteed to
     pass app.ai_analysis.validation, and used whenever a provider is
-    unavailable or its output failed grounding."""
+    unavailable or its output failed grounding.
+
+    Hardening pass (§U): mode still selects which slice of this same
+    deterministic content is surfaced -- the fallback path must not
+    silently ignore mode just because it's already the safety net."""
     supporting = [c.statement for c in claims if c.direction == ClaimDirection.SUPPORTING]
     contradicting = [c.statement for c in claims if c.direction == ClaimDirection.CONTRADICTING]
     unknown = [c.statement for c in claims if c.direction == ClaimDirection.UNKNOWN]
     refs = sorted({ref for c in claims for ref in c.evidence_refs})
     invalidation = list(packet.setup.candidate.invalidation_criteria) if packet.setup is not None else []
 
+    situation_summary = f"{packet.symbol} ({packet.timeframe}). RANKING GATE: {packet.ranking_gate_status}."
+    setup_explanation = "; ".join(supporting) or "No supporting deterministic claims are currently available."
+    catalyst_text = (
+        packet.catalyst_context.label_basis
+        if packet.catalyst_context is not None
+        else "No catalyst context available."
+    )
+    # (§Y) See mock_provider.py's matching comment -- formal statistical
+    # research and historical analog search are independent systems.
+    historical_text = (
+        packet.historical_research.independence.evidence_maturity_basis
+        if packet.historical_research is not None
+        else "Formal statistical research is unavailable for this packet's as_of. This does not imply "
+        "historical analog search is unavailable -- see the separate Historical Analogs section."
+    )
+
+    if mode == AnalysisMode.QUICK:
+        fields = dict(
+            setup_explanation="",
+            supporting_evidence=supporting[:1],
+            contradictory_evidence=contradicting[:1],
+            catalyst_context="",
+            historical_context="",
+            uncertainty=[],
+            invalidation_conditions=invalidation[:1],
+            monitor_next=[],
+        )
+    elif mode == AnalysisMode.CATALYST:
+        fields = dict(
+            setup_explanation="",
+            supporting_evidence=[],
+            contradictory_evidence=[],
+            catalyst_context=catalyst_text,
+            historical_context="",
+            uncertainty=[],
+            invalidation_conditions=[],
+            monitor_next=[],
+        )
+    elif mode == AnalysisMode.ANALOGS:
+        fields = dict(
+            setup_explanation="",
+            supporting_evidence=[],
+            contradictory_evidence=[],
+            catalyst_context="",
+            historical_context=historical_text,
+            uncertainty=[],
+            invalidation_conditions=[],
+            monitor_next=[],
+        )
+    elif mode == AnalysisMode.WHY_THIS_SETUP:
+        section = packet.setup
+        fields = dict(
+            setup_explanation=setup_explanation,
+            supporting_evidence=section.qualification_reasons if section is not None else [],
+            contradictory_evidence=section.conflict_reasons if section is not None else [],
+            catalyst_context="",
+            historical_context="",
+            uncertainty=section.near_miss_reasons if section is not None else [],
+            invalidation_conditions=invalidation,
+            monitor_next=[],
+        )
+    elif mode == AnalysisMode.WHY_NOT:
+        section = packet.setup
+        fields = dict(
+            setup_explanation="This candidate did not qualify."
+            if section is not None and not section.qualified
+            else "This candidate qualified; no rejected alternative to explain.",
+            supporting_evidence=[],
+            contradictory_evidence=(section.rejection_reasons or section.conflict_reasons)
+            if section is not None
+            else [],
+            catalyst_context="",
+            historical_context="",
+            uncertainty=section.near_miss_reasons if section is not None else [],
+            invalidation_conditions=[],
+            monitor_next=[],
+        )
+    else:  # FULL
+        fields = dict(
+            setup_explanation=setup_explanation,
+            supporting_evidence=supporting,
+            contradictory_evidence=contradicting,
+            catalyst_context=catalyst_text,
+            historical_context=historical_text,
+            uncertainty=unknown,
+            invalidation_conditions=invalidation,
+            monitor_next=invalidation,
+        )
+
     return ResearchBrief(
         brief_id=_fallback_brief_id(packet.packet_id, mode),
         evidence_packet_id=packet.packet_id,
         mode=mode,
-        situation_summary=(
-            f"{packet.symbol} ({packet.timeframe}). RANKING GATE: {packet.ranking_gate_status}."
-        ),
-        setup_explanation=(
-            "; ".join(supporting) or "No supporting deterministic claims are currently available."
-        ),
-        supporting_evidence=supporting,
-        contradictory_evidence=contradicting,
-        catalyst_context=(
-            packet.catalyst_context.label_basis
-            if packet.catalyst_context is not None
-            else "No catalyst context available."
-        ),
-        historical_context=(
-            packet.historical_research.independence.evidence_maturity_basis
-            if packet.historical_research is not None
-            else "No historical research runs are available for this symbol/timeframe."
-        ),
-        uncertainty=unknown,
-        invalidation_conditions=invalidation,
-        monitor_next=invalidation,
+        situation_summary=situation_summary,
         evidence_refs=refs,
         generated_at=datetime.now(timezone.utc),
         as_of=packet.as_of,
@@ -74,6 +147,7 @@ def build_deterministic_fallback_brief(
         prompt_version=RESEARCH_BRIEF_PROMPT_VERSION,
         grounding_rejected=bool(violations),
         grounding_violations=violations or [],
+        **fields,
     )
 
 

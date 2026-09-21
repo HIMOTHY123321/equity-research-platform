@@ -7,7 +7,7 @@ import { useParams } from "next/navigation";
 import { EvidenceAuditTrail } from "@/components/EvidenceAuditTrail";
 import { TopNav } from "@/components/TopNav";
 import { ApiError, getResearchBrief, getSavedEvidencePacket } from "@/lib/api";
-import { formatEnumLabel, formatExchangeTimestamp } from "@/lib/format";
+import { formatAiProviderLabel, formatEnumLabel, formatExchangeTimestamp } from "@/lib/format";
 import type { EvidencePacket, ResearchBrief } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
@@ -97,7 +97,7 @@ export default function ReportDetailPage() {
                 {formatEnumLabel(brief.mode)} · {formatExchangeTimestamp(brief.generated_at)}
               </h2>
               <span className="rounded bg-border px-1.5 py-0.5 text-[9px] uppercase text-muted">
-                {brief.provider}
+                {formatAiProviderLabel(brief.provider)}
                 {brief.model ? ` · ${brief.model}` : ""} · {brief.prompt_version}
               </span>
             </div>

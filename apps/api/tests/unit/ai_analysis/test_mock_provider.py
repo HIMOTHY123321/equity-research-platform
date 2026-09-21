@@ -83,6 +83,45 @@ def test_mock_brief_is_deterministic():
     assert first.model_dump(exclude={"generated_at"}) == second.model_dump(exclude={"generated_at"})
 
 
+def test_all_six_modes_produce_materially_different_content():
+    # Hardening pass (§U) regression: QUICK/FULL/WHY_THIS_SETUP/WHY_NOT/
+    # CATALYST/ANALOGS used to render byte-identical content -- only
+    # `mode`/`brief_id` differed. Every mode must now select a genuinely
+    # different slice of the same underlying packet/claims.
+    setup_id = _setup_id()
+    packet = _packet(setup_id=setup_id, with_news=True)
+    claims = derive_evidence_claims(packet)
+    provider = MockAIAnalysisProvider()
+
+    def _content_signature(brief):
+        return (
+            brief.setup_explanation,
+            tuple(brief.supporting_evidence),
+            tuple(brief.contradictory_evidence),
+            brief.catalyst_context,
+            brief.historical_context,
+            tuple(brief.uncertainty),
+            tuple(brief.invalidation_conditions),
+        )
+
+    signatures = {
+        mode: _content_signature(provider.synthesize_research_brief(packet, claims, mode))
+        for mode in AnalysisMode
+    }
+    # No two modes should produce the exact same content signature.
+    assert len(set(signatures.values())) == len(signatures), signatures
+
+
+def test_quick_mode_is_concise():
+    packet = _packet(with_news=True)
+    claims = derive_evidence_claims(packet)
+    brief = MockAIAnalysisProvider().synthesize_research_brief(packet, claims, AnalysisMode.QUICK)
+    assert len(brief.supporting_evidence) <= 1
+    assert len(brief.contradictory_evidence) <= 1
+    assert brief.catalyst_context == ""
+    assert brief.historical_context == ""
+
+
 def test_mock_brief_never_contains_banned_language():
     packet = _packet(with_news=True)
     claims = derive_evidence_claims(packet)

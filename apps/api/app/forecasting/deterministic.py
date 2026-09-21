@@ -77,11 +77,11 @@ def generate_direction_forecast(packet: EvidencePacket, config: ForecastConfig) 
             "No targeted setup on this packet -- a deterministic direction call requires a "
             "qualified/rejected setup's own directional thesis to ground the forecast in.",
         )
-    if quality == EvidenceQualityState.INSUFFICIENT_EVIDENCE:
+    if quality in (EvidenceQualityState.INSUFFICIENT_EVIDENCE, EvidenceQualityState.WEAK_EVIDENCE):
         return _abstain(
             quality,
             _insufficiency_reason(packet),
-            "Historical research evidence is insufficient to support a directional forecast.",
+            "Evidence quality is too weak to support a directional forecast.",
         )
 
     value = (
@@ -105,6 +105,12 @@ def generate_structure_forecast(packet: EvidencePacket, config: ForecastConfig) 
             quality,
             AbstentionReason.INSUFFICIENT_HISTORICAL_ANALOGS,
             "No targeted setup on this packet to bind a structure forecast to.",
+        )
+    if quality in (EvidenceQualityState.INSUFFICIENT_EVIDENCE, EvidenceQualityState.WEAK_EVIDENCE):
+        return _abstain(
+            quality,
+            _insufficiency_reason(packet),
+            "Evidence quality is too weak to support a structure forecast.",
         )
     bullish = packet.setup.candidate.direction.value == "bullish"
     sr = packet.support_resistance

@@ -1061,6 +1061,10 @@ export interface AnalogQueryResponse {
   diversity: AnalogDiversityReport;
   diverse_analogs: AnalogResult[];
   catalyst_context_applied: boolean;
+  // Hardening pass (§T): set only when the corpus itself can't support a
+  // genuinely cross-symbol-diverse result -- the UI must show this instead
+  // of silently hiding the diverse-analogs control.
+  diversity_unavailable_reason?: string | null;
 }
 
 export interface ResearchSnapshot {

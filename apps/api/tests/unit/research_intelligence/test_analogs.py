@@ -9,6 +9,7 @@ from app.research_intelligence.analogs import (
     attach_outcomes,
     distance_between,
     diverse_analogs,
+    diversity_unavailable_reason,
     extract_features,
     rank_analogs,
 )
@@ -336,6 +337,70 @@ def test_diverse_analogs_never_touches_distance_or_order_of_survivors():
     ranked_by_id = {r.setup_id: r for r in ranked}
     for r in diverse:
         assert r.distance.distance == ranked_by_id[r.setup_id].distance.distance
+
+
+def test_diverse_analogs_caps_analogs_per_symbol_when_a_limit_is_requested():
+    # Hardening pass (#T) regression: exact reported symptom -- "4 of top 10
+    # share same episode, 100% of top 10 are SPY". Ten SPY analogs, no
+    # episode data (so episode dedup alone can't diversify), limit=5 must
+    # not just be the first five SPY entries.
+    setup_ids = [chr(ord("a") + i) for i in range(10)]
+    ranked = _ranked(setup_ids, symbols=["SPY"] * 10)
+    diverse = diverse_analogs(ranked, {}, limit=5, max_per_symbol=2)
+    symbol_counts: dict[str, int] = {}
+    for r in diverse:
+        symbol_counts[r.symbol] = symbol_counts.get(r.symbol, 0) + 1
+    # Single-symbol corpus: the per-symbol cap alone can't be honored
+    # without dropping below `limit`, so backfill fills the remaining slots
+    # -- the cap is enforced only as far as the corpus allows.
+    assert len(diverse) == 5
+    assert symbol_counts == {"SPY": 5}
+
+
+def test_diverse_analogs_backfills_from_next_best_when_symbol_cap_would_starve_the_limit():
+    setup_ids = ["a", "b", "c", "d", "e"]
+    symbols = ["SPY", "SPY", "SPY", "SPY", "SPY"]
+    ranked = _ranked(setup_ids, symbols=symbols)
+    # max_per_symbol=1 would only allow 1 result without backfill; limit=3
+    # forces backfill to relax the symbol cap (never the episode cap).
+    diverse = diverse_analogs(ranked, {}, limit=3, max_per_symbol=1)
+    assert [r.setup_id for r in diverse] == ["a", "b", "c"]
+
+
+def test_diverse_analogs_respects_cross_symbol_availability_before_backfilling():
+    setup_ids = ["a", "b", "c", "d"]
+    symbols = ["SPY", "SPY", "NVDA", "SPY"]
+    ranked = _ranked(setup_ids, symbols=symbols)
+    diverse = diverse_analogs(ranked, {}, limit=3, max_per_symbol=1)
+    setup_ids_result = [r.setup_id for r in diverse]
+    # "a" (SPY, first) and "c" (NVDA, only cross-symbol option) fill the
+    # strict pass; "b" (a second SPY) only appears via backfill for the
+    # third slot since NVDA has no more entries.
+    assert setup_ids_result[0] == "a"
+    assert "c" in setup_ids_result
+    assert len(setup_ids_result) == 3
+
+
+def test_diverse_analogs_with_no_limit_never_applies_a_symbol_cap():
+    ranked = _ranked(["a", "b", "c", "d"], symbols=["SPY"] * 4)
+    diverse = diverse_analogs(ranked, {})
+    assert len(diverse) == 4
+
+
+def test_diversity_unavailable_reason_flags_a_single_symbol_corpus():
+    ranked = _ranked(["a", "b", "c"], symbols=["SPY"] * 3)
+    reason = diversity_unavailable_reason(ranked)
+    assert reason is not None
+    assert "unavailable" in reason.lower()
+
+
+def test_diversity_unavailable_reason_is_none_with_multiple_symbols():
+    ranked = _ranked(["a", "b"], symbols=["SPY", "NVDA"])
+    assert diversity_unavailable_reason(ranked) is None
+
+
+def test_diversity_unavailable_reason_is_none_for_an_empty_corpus():
+    assert diversity_unavailable_reason([]) is None
 
 
 def test_diverse_analogs_respects_limit():

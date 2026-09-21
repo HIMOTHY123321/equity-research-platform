@@ -8,8 +8,8 @@ underlying candle series are handled for free.
 
 from __future__ import annotations
 
+from app.ai_analysis.evidence_packet import build_evidence_packet
 from app.ai_analysis.repository import SqlAlchemyEvidenceRepository
-from app.forecasting.repository import SqlAlchemyForecastRepository
 from app.forecasting.resolver import resolve_forecast
 from app.forecasting.schemas import (
     EvidenceQualityState,
@@ -18,8 +18,8 @@ from app.forecasting.schemas import (
     ForecastOutcomeCategory,
     ForecastStatus,
     ForwardForecast,
+    StructureForecastValue,
 )
-from app.forecasting.service import create_forecast
 from app.news.fixture_provider import FixtureNewsProvider
 from app.schemas.market_data import Timeframe
 from tests.unit.ai_analysis.conftest import SPY_1H, FakeMarketDataProvider, make_session
@@ -128,27 +128,56 @@ def test_structure_forecast_resolves_against_real_future_structure():
     # always misses. The resolver re-identifies "the same structural level"
     # by price-range overlap against the *original* packet's zone bounds
     # instead of requiring the exact ID to still exist.
+    #
+    # This test isolates that resolver behavior from generate_structure_
+    # forecast's own evidence-quality gate (#J) -- the fixture's real
+    # research quality for this candidate is WEAK_EVIDENCE, which correctly
+    # abstains at creation time (covered by test_deterministic.py); the
+    # forecast here is constructed directly, exactly like
+    # _direction_forecast above, to test zone re-identification on its own.
     session = make_session()
     research_repository, news_repository = seeded_repositories()
     evidence_repository = SqlAlchemyEvidenceRepository(session)
-    forecast_repository = SqlAlchemyForecastRepository(session)
 
     candidate_id = some_candidate_id()
-    forecast = create_forecast(
+    packet = build_evidence_packet(
         symbol="SPY",
         timeframe=Timeframe.ONE_HOUR,
-        forecast_category=ForecastCategory.STRUCTURE,
-        horizon_bars=100,
-        setup_id=candidate_id,
         market_provider=FakeMarketDataProvider(),
         news_provider=FixtureNewsProvider([]),
         news_repository=news_repository,
         research_repository=research_repository,
-        evidence_repository=evidence_repository,
-        forecast_repository=forecast_repository,
-        market_as_of=CREATION_AS_OF,
+        setup_id=candidate_id,
+        as_of=CREATION_AS_OF,
     )
-    assert forecast.status == ForecastStatus.ACTIVE
+    evidence_repository.save_packet(packet)
+    assert packet.setup is not None
+    bullish = packet.setup.candidate.direction.value == "bullish"
+    sr = packet.support_resistance
+    zone = sr.nearest_resistance if bullish else sr.nearest_support
+    assert zone is not None, "fixture candidate must have a real zone on its own side to test against"
+
+    forecast = ForwardForecast(
+        forecast_id="structure-real-fixture",
+        created_at=CREATION_AS_OF,
+        market_as_of=CREATION_AS_OF,
+        symbol="SPY",
+        timeframe="1h",
+        forecast_category=ForecastCategory.STRUCTURE,
+        forecast_value=(
+            StructureForecastValue.RESISTANCE_BREAKS.value
+            if bullish
+            else StructureForecastValue.SUPPORT_FAILS.value
+        ),
+        forecast_horizon_bars=100,
+        zone_ref=zone.id,
+        evidence_packet_id=packet.packet_id,
+        evidence_packet_schema_version=packet.schema_version,
+        pipeline_version=packet.pipeline_version,
+        evidence_quality=EvidenceQualityState.MIXED_EVIDENCE,
+        origin=ForecastOrigin.DETERMINISTIC_RESEARCH,
+        status=ForecastStatus.ACTIVE,
+    )
 
     outcome = resolve_forecast(forecast, FakeMarketDataProvider(), evidence_repository)
     assert outcome.outcome in (ForecastOutcomeCategory.CORRECT, ForecastOutcomeCategory.INCORRECT)

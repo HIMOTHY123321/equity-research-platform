@@ -2,11 +2,15 @@
 
 import { useState } from "react";
 
-import { formatSignedPercent } from "@/lib/format";
+import { formatExchangeTimestamp, formatSignedPercent } from "@/lib/format";
 import type { AnalogDiversityReport, AnalogResult } from "@/lib/types";
 
-function AnalogRow({ analog }: { analog: AnalogResult }) {
+function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetupType?: string }) {
   const [expanded, setExpanded] = useState(false);
+  // (§Q) Feature-based cross-setup analogs can be legitimate similarity
+  // matches, but must never be visually indistinguishable from a same-
+  // setup-type analog -- the two claims mean different things.
+  const isSameSetup = querySetupType !== undefined && analog.setup_type === querySetupType;
   return (
     <li className="rounded border border-border bg-surface-raised">
       <button
@@ -16,14 +20,35 @@ function AnalogRow({ analog }: { analog: AnalogResult }) {
       >
         <span className="flex items-center gap-3">
           <span className="font-mono text-foreground">{analog.symbol}</span>
-          <span className="text-muted">{new Date(analog.timestamp).toLocaleString()}</span>
+          {/* (§P) The real detection timestamp, exchange-timezone-aware --
+              never the browser's own local time, and never silently
+              truncated to a session date for an intraday setup. */}
+          <span className="text-muted">{formatExchangeTimestamp(analog.timestamp)}</span>
           <span className="text-muted">{analog.setup_type.replace(/_/g, " ")}</span>
           <span className="text-muted">{analog.direction}</span>
+          {querySetupType !== undefined && (
+            <span
+              className={`rounded px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide ${
+                isSameSetup ? "bg-accent/15 text-accent" : "bg-muted/15 text-muted"
+              }`}
+            >
+              {isSameSetup ? "Same setup" : "Cross-setup"}
+            </span>
+          )}
         </span>
-        <span className="font-mono text-accent">distance {analog.distance.distance.toFixed(3)}</span>
+        <span className="font-mono text-accent" title="Lower distance = more similar. Normalized across matched feature dimensions -- expand for the contributing dimensions.">
+          distance {analog.distance.distance.toFixed(3)}
+        </span>
       </button>
       {expanded && (
         <div className="grid grid-cols-1 gap-3 border-t border-border px-3 py-2 text-[11px] sm:grid-cols-3">
+          {!isSameSetup && querySetupType !== undefined && (
+            <p className="text-muted sm:col-span-3">
+              Cross-setup analog: matched on shared feature dimensions (below), not on setup type -- a{" "}
+              {analog.setup_type.replace(/_/g, " ")} case being similar to a {querySetupType.replace(/_/g, " ")}{" "}
+              query on structure/volatility/RVOL/gap/S-R geometry.
+            </p>
+          )}
           <div>
             <h4 className="mb-1 font-semibold uppercase tracking-wide text-muted">What matched</h4>
             {analog.distance.matched_dimensions.length > 0 ? (
@@ -77,10 +102,21 @@ export function HistoricalAnalogsPanel({
   analogs,
   diversity,
   diverseAnalogs,
+  diversityUnavailableReason,
+  querySetupType,
 }: {
   analogs: AnalogResult[];
   diversity?: AnalogDiversityReport;
   diverseAnalogs?: AnalogResult[];
+  /** Hardening pass (§T): when set, the corpus itself can't support a
+   * genuinely cross-symbol-diverse result -- shown explicitly rather than
+   * silently hiding the diverse-analogs control, which would otherwise
+   * look identical to "not requested yet". */
+  diversityUnavailableReason?: string | null;
+  /** (§Q) The setup type actually being queried against -- lets each row
+   * distinguish a same-setup-type analog from a feature-based cross-setup
+   * analog rather than presenting both identically. */
+  querySetupType?: string;
 }) {
   const [showDiverse, setShowDiverse] = useState(false);
   if (analogs.length === 0) {
@@ -105,6 +141,11 @@ export function HistoricalAnalogsPanel({
           </button>
         )}
       </div>
+      {!canShowDiverse && diversityUnavailableReason && (
+        <p className="mb-2 rounded border border-border bg-surface-raised px-2 py-1 text-[11px] text-muted">
+          {diversityUnavailableReason}
+        </p>
+      )}
       {diversity?.warning && (
         <p className="mb-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
           {diversity.warning}
@@ -112,7 +153,7 @@ export function HistoricalAnalogsPanel({
       )}
       <ul className="space-y-1.5">
         {displayed.map((a) => (
-          <AnalogRow key={a.setup_id} analog={a} />
+          <AnalogRow key={a.setup_id} analog={a} querySetupType={querySetupType} />
         ))}
       </ul>
     </div>

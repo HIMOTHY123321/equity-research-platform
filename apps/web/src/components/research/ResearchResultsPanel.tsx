@@ -145,6 +145,15 @@ function ExcursionBlock({ excursions, firstHit }: { excursions: ExcursionProfile
   return (
     <div className="rounded border border-border bg-surface-raised p-4">
       <h3 className="mb-2 text-sm font-semibold text-foreground">Excursion profile</h3>
+      {/* (§AF) MFE/MAE search the entire remaining candle series after
+          detection, not a bounded trading horizon -- a large value (e.g.
+          many multiples of entry ATR) reflects a genuine later move
+          somewhere in that full window, not a data error. See "Bars to
+          MFE / MAE" for how far out the extremum actually occurred. */}
+      <p className="mb-2 text-[10px] text-muted">
+        MFE/MAE search the full remaining candle series after detection, not a fixed horizon -- an extreme
+        value reflects a genuine move at some point in that window (see bars-until below), not a data error.
+      </p>
       <div className="grid grid-cols-2 gap-3 text-[11px] sm:grid-cols-3">
         <div>
           <div className="text-muted">MFE (ATR)</div>

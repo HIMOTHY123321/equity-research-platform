@@ -75,6 +75,8 @@ export default function ResearchLabPage() {
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
   const [analogDiversity, setAnalogDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
+  const [diversityUnavailableReason, setDiversityUnavailableReason] = useState<string | null>(null);
+  const [analogQuerySetupType, setAnalogQuerySetupType] = useState<string | null>(null);
   const [analogStatus, setAnalogStatus] = useState<AsyncStatus>("idle");
   const [analogError, setAnalogError] = useState<string | null>(null);
 
@@ -165,6 +167,8 @@ export default function ResearchLabPage() {
       setAnalogs(res.analogs);
       setAnalogDiversity(res.diversity);
       setDiverseAnalogs(res.diverse_analogs);
+      setDiversityUnavailableReason(res.diversity_unavailable_reason ?? null);
+      setAnalogQuerySetupType(entry.detection.setup_type);
       setAnalogStatus("completed");
     } catch (err) {
       setAnalogError(err instanceof ApiError ? err.message : "Analog query failed");
@@ -439,6 +443,8 @@ export default function ResearchLabPage() {
                 analogs={analogs}
                 diversity={analogDiversity ?? undefined}
                 diverseAnalogs={diverseAnalogs ?? undefined}
+                diversityUnavailableReason={diversityUnavailableReason}
+                querySetupType={analogQuerySetupType ?? undefined}
               />
             )}
           </section>

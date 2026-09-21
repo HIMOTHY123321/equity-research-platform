@@ -237,6 +237,13 @@ export default function ForecastLabPage() {
                 {setupPool.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.setup_type} · {s.direction} · {formatExchangeTimestamp(s.candidate_candle_timestamp)}
+                    {/* (§L) Two candidates can share type/direction/candle
+                        but differ by reference_source/reference_price --
+                        disambiguated here rather than looking like an
+                        unexplained duplicate. */}
+                    {s.reference_source ? ` · ref: ${s.reference_source}` : ""}
+                    {s.reference_price !== null ? ` @ ${s.reference_price.toFixed(2)}` : ""}
+                    {` · #${s.id.slice(0, 8)}`}
                   </option>
                 ))}
               </select>
@@ -274,6 +281,14 @@ export default function ForecastLabPage() {
           <h2 className="text-xs font-semibold uppercase tracking-wide text-muted">
             Active Forecasts ({activeForecasts.length})
           </h2>
+          {/* (§I) Resolution is automatic -- the background ForecastMonitor
+              resolves every forecast the instant its horizon genuinely
+              closes, with no user action required. The per-row button
+              below is a developer/debug escape hatch only, never the
+              normal path. */}
+          <p className="text-[10px] text-muted">
+            Forecasts resolve automatically in the background once their horizon closes -- no action required.
+          </p>
           {activeForecasts.length === 0 ? (
             <p className="text-xs text-muted">No active forecasts for {symbol}.</p>
           ) : (
@@ -308,9 +323,10 @@ export default function ForecastLabPage() {
                           type="button"
                           onClick={() => handleResolve(f.forecast_id)}
                           disabled={resolvingId === f.forecast_id}
-                          className="rounded border border-accent px-2 py-0.5 text-[11px] text-accent disabled:opacity-50"
+                          title="Debug only -- forecasts resolve automatically in the background; this forces an immediate check instead of waiting for the next automatic scan."
+                          className="rounded border border-border px-2 py-0.5 text-[10px] text-muted hover:border-accent hover:text-accent disabled:opacity-50"
                         >
-                          {resolvingId === f.forecast_id ? "RESOLVING…" : "RESOLVE"}
+                          {resolvingId === f.forecast_id ? "CHECKING…" : "CHECK NOW (DEBUG)"}
                         </button>
                       </td>
                     </tr>
@@ -328,8 +344,8 @@ export default function ForecastLabPage() {
           </h2>
           {resolvedRows.length === 0 ? (
             <p className="text-xs text-muted">
-              No forecasts resolved yet in this session -- click RESOLVE on an active forecast once its horizon has
-              closed.
+              No forecasts resolved yet in this session -- resolution happens automatically in the background once a
+              forecast&apos;s horizon closes.
             </p>
           ) : (
             <div className="overflow-x-auto">

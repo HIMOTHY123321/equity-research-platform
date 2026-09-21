@@ -45,8 +45,25 @@ function CheckRow({ check }: { check: EvidenceCheck }) {
 }
 
 function EvidenceTree({ candidate }: { candidate: SetupCandidate }) {
+  const isQualified = candidate.current_state === "qualified" || candidate.current_state === "triggered";
+  const hasFailedSoftChecks = candidate.soft_checks.some((c) => !c.passed);
+  const hasConflicts = candidate.conflicts.length > 0;
   return (
     <div className="mt-2 space-y-2 border-t border-border pt-2">
+      {/* (§AH) A QUALIFIED state resting solely on hard requirements, with
+          negative/failed soft confirmations or open conflicts, must never
+          leave the user to infer that on their own. */}
+      {isQualified && (hasFailedSoftChecks || hasConflicts) && (
+        <p className="rounded border border-border bg-background px-2 py-1 text-[10px] text-muted">
+          Qualified on hard requirements only; soft confirmations are advisory and currently{" "}
+          {hasFailedSoftChecks && hasConflicts
+            ? "negative, with open conflicts"
+            : hasFailedSoftChecks
+              ? "negative"
+              : "in conflict"}
+          .
+        </p>
+      )}
       {candidate.hard_checks.length > 0 && (
         <div className="space-y-1">
           <h5 className="text-[10px] font-semibold tracking-wide text-muted">HARD REQUIREMENTS</h5>

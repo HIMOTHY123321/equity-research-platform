@@ -91,12 +91,27 @@ export function CatalystContextCard({ candidate }: { candidate: SetupCandidate }
           {nearest && (
             <div className="mt-1.5 space-y-0.5 text-[11px] text-foreground">
               <p>
+                <span
+                  className={`mr-1 rounded px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide ${
+                    nearest.hours_after_setup !== null
+                      ? "bg-muted/15 text-muted"
+                      : "bg-accent/15 text-accent"
+                  }`}
+                >
+                  {nearest.hours_after_setup !== null ? "Post-setup" : "Pre-setup"}
+                </span>
                 {formatCatalystCategory(nearest.category)}
                 {nearest.hours_before_setup !== null &&
                   ` — ${formatHoursAgo(nearest.hours_before_setup)} before setup`}
                 {nearest.hours_after_setup !== null &&
                   ` — ${formatHoursAgo(nearest.hours_after_setup)} after setup`}
               </p>
+              {/* (§M) A catalyst that occurred after setup detection cannot
+                  have caused the setup -- said explicitly, never left for
+                  the user to infer from a bare time delta. */}
+              {nearest.hours_after_setup !== null && (
+                <p className="text-muted">Not part of original setup evidence.</p>
+              )}
               <p className="text-muted">{formatSourceCount(nearest.source_count)}</p>
               {initialReaction && (
                 <p>Initial reaction: {formatSignedPercent(initialReaction.directional_return_percent)}</p>

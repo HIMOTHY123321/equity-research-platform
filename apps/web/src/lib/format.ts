@@ -121,6 +121,31 @@ export function formatSetupType(type: string): string {
   return SETUP_TYPE_LABELS[type] ?? type;
 }
 
+/** §AE: `evidence_refs` are raw citation strings like
+ * "analog:setup:moving_average_reclaim:82fd..." -- readable as a primary
+ * chip label ("Analog — Moving Average Reclaim"), with the full raw ref
+ * still available via `title` for developer inspection. Prefixes match
+ * app.ai_analysis.claims's own convention (zone:/structure:/setup:/
+ * catalyst:/analog:). */
+export function formatEvidenceRef(ref: string): string {
+  const [prefix, ...rest] = ref.split(":");
+  const remainder = rest.join(":");
+  switch (prefix) {
+    case "zone":
+      return `Level — ${remainder.replace(/^zone:/, "").replace(/_/g, " ")}`;
+    case "structure":
+      return `Structure — ${formatEnumLabel(remainder)}`;
+    case "setup":
+      return `Setup — #${remainder.slice(0, 8)}`;
+    case "catalyst":
+      return remainder === "none" ? "Catalyst — none" : `Catalyst — #${remainder.slice(0, 8)}`;
+    case "analog":
+      return `Analog — #${remainder.slice(0, 8)}`;
+    default:
+      return ref;
+  }
+}
+
 const LIFECYCLE_STATE_LABELS: Record<string, string> = {
   candidate: "Candidate",
   qualified: "Qualified",
@@ -162,6 +187,16 @@ export function formatExchangeTimestamp(iso: string | null): string {
 
 export function formatClockTime(iso: string): string {
   return new Date(iso).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+}
+
+/** §AC: whether a timestamp falls at exactly midnight in exchange local
+ * time -- used to explain (not hide) why a completed-1D-bar cutoff shows
+ * 00:00:00, rather than comparing against UTC midnight (which a real
+ * America/New_York midnight almost never coincides with). */
+export function isExchangeMidnight(iso: string): boolean {
+  const parts = _EXCHANGE_TZ_PARTS.formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return get("hour") === "00" && get("minute") === "00" && get("second") === "00";
 }
 
 /** Daily-timeframe candle timestamps sit at midnight -- a clock time is
@@ -287,6 +322,15 @@ export function formatEnumLabel(value: string | null): string {
     .split("_")
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ");
+}
+
+/** §X: never let a user read "mock"/"deterministic-fallback" as if it were
+ * a real AI provider's name -- an explicit, unambiguous label instead. Any
+ * other provider name (a real configured AI provider) is shown as-is. */
+export function formatAiProviderLabel(provider: string): string {
+  if (provider === "mock") return "DETERMINISTIC TEST MODE";
+  if (provider === "deterministic-fallback") return "DETERMINISTIC FALLBACK (grounding check failed)";
+  return provider.toUpperCase();
 }
 
 export function forecastStatusColorClass(status: string): string {

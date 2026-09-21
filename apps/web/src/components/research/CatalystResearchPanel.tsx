@@ -86,6 +86,13 @@ export function CatalystResearchPanel({ runIds }: { runIds: string[] }) {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CatalystResearchQueryResponse | null>(null);
 
+  // (§AG) A "compare vs. baseline" request only produces a meaningfully
+  // distinct comparison cohort when at least one catalyst constraint is
+  // actually applied -- otherwise the "filtered" and "unfiltered" groups
+  // are the same underlying set.
+  const hasCatalystConstraint =
+    requireCatalyst || catalystCategory !== "" || maxHoursSince !== "" || rvolElevated !== "";
+
   async function handleQuery(e: React.FormEvent) {
     e.preventDefault();
     if (runIds.length === 0) {
@@ -106,7 +113,7 @@ export function CatalystResearchPanel({ runIds }: { runIds: string[] }) {
         catalystCategory: catalystCategory || undefined,
         catalystMaxHoursSince: maxHoursSince ? Number(maxHoursSince) : undefined,
         catalystRvolElevated: rvolElevated === "" ? undefined : rvolElevated === "true",
-        compareToNoCatalyst,
+        compareToNoCatalyst: compareToNoCatalyst && hasCatalystConstraint,
       });
       setResult(res);
       setStatus("completed");
@@ -234,10 +241,18 @@ export function CatalystResearchPanel({ runIds }: { runIds: string[] }) {
           />
           Require catalyst
         </label>
-        <label className="flex items-center gap-1.5 pb-1.5 text-xs text-muted">
+        <label
+          className={`flex items-center gap-1.5 pb-1.5 text-xs ${hasCatalystConstraint ? "text-muted" : "text-muted/50"}`}
+          title={
+            hasCatalystConstraint
+              ? undefined
+              : "Add a catalyst constraint (Require catalyst, a category, time-since, or RVOL bucket) first -- otherwise the filtered and unfiltered cohorts would be identical and the comparison would be meaningless."
+          }
+        >
           <input
             type="checkbox"
-            checked={compareToNoCatalyst}
+            checked={compareToNoCatalyst && hasCatalystConstraint}
+            disabled={!hasCatalystConstraint}
             onChange={(e) => setCompareToNoCatalyst(e.target.checked)}
           />
           Compare vs. baseline (no match)

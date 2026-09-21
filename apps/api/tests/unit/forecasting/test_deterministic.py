@@ -26,12 +26,28 @@ from app.forecasting.schemas import (
     VolatilityForecastValue,
 )
 from app.news.schemas import CatalystReference, SetupCatalystContext, SetupCatalystContextLabel
+from app.research_intelligence.schemas import EvidenceMaturity
 
 _CONFIG = DEFAULT_FORECAST_CONFIG
 
 
 def _empty_research():
     return None  # no historical_research -> classify_evidence_quality is INSUFFICIENT_EVIDENCE
+
+
+def _sufficient_research():
+    """A minimal historical_research fixture that classify_evidence_quality
+    resolves to MIXED_EVIDENCE (#J: must be strictly better than WEAK/
+    INSUFFICIENT for the direction/structure generators to produce a value
+    instead of abstaining)."""
+    return SimpleNamespace(
+        independence=SimpleNamespace(
+            evidence_maturity=EvidenceMaturity.MIXED.value, conclusion_stability=None
+        ),
+        contradictions=[],
+        overlap=SimpleNamespace(overlap_fraction=0.0),
+        concentration=SimpleNamespace(warnings=[]),
+    )
 
 
 def _candidate(direction="bullish", setup_type="breakout_retest", candidate_id="cand-1", qualified=True):
@@ -72,6 +88,43 @@ def test_direction_abstains_when_evidence_insufficient():
     assert decision.abstained
 
 
+def test_direction_abstains_when_evidence_weak():
+    # Regression (#J): a generator can technically produce a directional
+    # value even when the research-quality gate says the evidence is too
+    # weak to trust -- WEAK_EVIDENCE must abstain, same as
+    # INSUFFICIENT_EVIDENCE, never merely because a value *could* be
+    # computed.
+    from types import SimpleNamespace as NS
+
+    from app.research_intelligence.schemas import ConclusionLabel
+
+    weak_research = SimpleNamespace(
+        independence=SimpleNamespace(
+            evidence_maturity=EvidenceMaturity.REPLICATED.value,
+            conclusion_stability=NS(label=ConclusionLabel.REVERSES),
+            sample_composition=NS(purged_counts_by_horizon={"h20": 25}),
+            walk_forward=NS(stability=NS(value="stable")),
+        ),
+        contradictions=[],
+        overlap=SimpleNamespace(overlap_fraction=0.0),
+        concentration=SimpleNamespace(warnings=[]),
+    )
+    decision = generate_direction_forecast(
+        _packet(setup=_candidate(), historical_research=weak_research), _CONFIG
+    )
+    assert decision.abstained
+    from app.forecasting.schemas import EvidenceQualityState
+
+    assert decision.evidence_quality == EvidenceQualityState.WEAK_EVIDENCE
+
+
+def test_direction_produces_a_value_when_evidence_is_sufficient():
+    decision = generate_direction_forecast(
+        _packet(setup=_candidate(direction="bullish"), historical_research=_sufficient_research()), _CONFIG
+    )
+    assert not decision.abstained
+
+
 # ---------------------------------------------------------------- STRUCTURE
 
 
@@ -90,7 +143,10 @@ def test_structure_abstains_when_no_zone_on_the_setups_side():
 def test_structure_bullish_targets_nearest_resistance_break():
     zone = SimpleNamespace(id="zone-1")
     sr = SimpleNamespace(nearest_support=None, nearest_resistance=zone)
-    decision = generate_structure_forecast(_packet(setup=_candidate(direction="bullish"), sr=sr), _CONFIG)
+    decision = generate_structure_forecast(
+        _packet(setup=_candidate(direction="bullish"), sr=sr, historical_research=_sufficient_research()),
+        _CONFIG,
+    )
     assert not decision.abstained
     assert decision.forecast_value == StructureForecastValue.RESISTANCE_BREAKS.value
     assert decision.zone_ref == "zone-1"
@@ -100,9 +156,25 @@ def test_structure_bullish_targets_nearest_resistance_break():
 def test_structure_bearish_targets_nearest_support_fail():
     zone = SimpleNamespace(id="zone-2")
     sr = SimpleNamespace(nearest_support=zone, nearest_resistance=None)
-    decision = generate_structure_forecast(_packet(setup=_candidate(direction="bearish"), sr=sr), _CONFIG)
+    decision = generate_structure_forecast(
+        _packet(setup=_candidate(direction="bearish"), sr=sr, historical_research=_sufficient_research()),
+        _CONFIG,
+    )
     assert decision.forecast_value == StructureForecastValue.SUPPORT_FAILS.value
     assert decision.zone_ref == "zone-2"
+
+
+def test_structure_abstains_when_evidence_insufficient_even_with_a_valid_zone():
+    # Regression (#J): previously generate_structure_forecast had no
+    # evidence-quality gate at all -- it would happily produce a value
+    # (SUPPORT_FAILS/RESISTANCE_BREAKS) from a qualified setup and a real
+    # zone even when historical_research was completely absent.
+    zone = SimpleNamespace(id="zone-1")
+    sr = SimpleNamespace(nearest_support=None, nearest_resistance=zone)
+    decision = generate_structure_forecast(
+        _packet(setup=_candidate(direction="bullish"), sr=sr, historical_research=None), _CONFIG
+    )
+    assert decision.abstained
 
 
 # ---------------------------------------------------------------- VOLATILITY

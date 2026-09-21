@@ -326,28 +326,88 @@ def analog_diversity_report(
     )
 
 
+DEFAULT_MAX_PER_SYMBOL = 2
+
+
 def diverse_analogs(
     ranked: list[AnalogResult],
     episode_by_setup_id: dict[str, SetupEpisode],
     limit: Optional[int] = None,
+    max_per_symbol: Optional[int] = DEFAULT_MAX_PER_SYMBOL,
 ) -> list[AnalogResult]:
-    """(#21) The "DIVERSE ANALOGS" view: the same ranked list, same
-    distances, filtered to at most one analog per episode -- since `ranked`
-    is already sorted by distance, keeping the first occurrence of each
-    episode keeps that episode's closest member. Analogs with no known
-    episode are never deduplicated against each other or against anything
-    else; only entries that provably share an episode are collapsed. The
-    underlying similarity calculation (`distance_between`) is never
-    touched."""
+    """(#21, hardening pass #T) The "DIVERSE ANALOGS" view: the same ranked
+    list, same distances, filtered to at most one analog per episode AND
+    (new) at most `max_per_symbol` analogs per symbol -- since `ranked` is
+    already sorted by distance, keeping the first occurrences honors each
+    episode's/symbol's closest member first. If applying both caps strictly
+    would leave fewer than `limit` analogs (e.g. the corpus genuinely only
+    contains one symbol), a second backfill pass relaxes the per-symbol cap
+    -- but never the per-episode cap, which stays a hard rule since a
+    repeated episode is the same underlying event, not merely the same
+    ticker -- filling remaining slots with the next-best-similarity
+    analogs. Analogs with no known episode are never deduplicated against
+    each other or against anything else; only entries that provably share
+    an episode are collapsed. The underlying similarity calculation
+    (`distance_between`) is never touched.
+
+    The per-symbol cap only activates when `limit` is set -- it exists to
+    keep a bounded top-N "diverse" view from being dominated by one symbol;
+    an unlimited call (no `limit`) returns every episode-deduplicated
+    analog, exactly as before this cap was introduced."""
     seen_episodes: set[str] = set()
+    symbol_counts: dict[str, int] = {}
     result: list[AnalogResult] = []
+    included_ids: set[str] = set()
+    effective_max_per_symbol = max_per_symbol if limit is not None else None
+
     for r in ranked:
         episode = episode_by_setup_id.get(r.setup_id)
+        if episode is not None and episode.episode_id in seen_episodes:
+            continue
+        symbol_count = symbol_counts.get(r.symbol, 0)
+        if effective_max_per_symbol is not None and symbol_count >= effective_max_per_symbol:
+            continue
         if episode is not None:
-            if episode.episode_id in seen_episodes:
-                continue
+            seen_episodes.add(episode.episode_id)
+        symbol_counts[r.symbol] = symbol_counts.get(r.symbol, 0) + 1
+        result.append(r)
+        included_ids.add(r.setup_id)
+        if limit is not None and len(result) >= limit:
+            return result
+
+    if limit is None or len(result) >= limit:
+        return result
+
+    # Backfill: the per-symbol cap alone couldn't fill `limit` -- relax only
+    # that cap (never the per-episode cap) and take the next-best-similarity
+    # remaining analogs, in the same distance order.
+    for r in ranked:
+        if r.setup_id in included_ids:
+            continue
+        episode = episode_by_setup_id.get(r.setup_id)
+        if episode is not None and episode.episode_id in seen_episodes:
+            continue
+        if episode is not None:
             seen_episodes.add(episode.episode_id)
         result.append(r)
-        if limit is not None and len(result) >= limit:
+        included_ids.add(r.setup_id)
+        if len(result) >= limit:
             break
     return result
+
+
+def diversity_unavailable_reason(ranked: list[AnalogResult]) -> Optional[str]:
+    """(#T) Honest disclosure for the "SHOW DIVERSE ANALOGS" UI action: if
+    the corpus available to rank against contains only one distinct symbol,
+    no amount of per-symbol capping can produce a cross-symbol-diverse
+    result -- say so explicitly rather than silently presenting a "diverse"
+    set that's still 100% one symbol."""
+    if not ranked:
+        return None
+    distinct_symbols = {r.symbol for r in ranked}
+    if len(distinct_symbols) <= 1:
+        return (
+            "Diversity unavailable -- no qualifying cross-symbol analogs exist in the current "
+            "research corpus."
+        )
+    return None
