@@ -232,6 +232,7 @@ def rank_analogs(
             setup_id=entry.setup_id,
             symbol=entry.symbol,
             timestamp=entry.candidate_candle_timestamp,
+            timeframe=entry.timeframe,
             setup_type=entry.setup_type,
             direction=entry.direction,
             distance=distance,
@@ -270,6 +271,14 @@ def attach_outcomes(
     return decorated
 
 
+def _readable_episode_label(episode_id: str) -> str:
+    """`episode_id` is `episode:{setup_type}:{content_hash}` (episodes.py) --
+    the setup type is the only part meaningful to a reader."""
+    parts = episode_id.split(":")
+    setup_type = parts[1] if len(parts) >= 2 else episode_id
+    return setup_type.replace("_", " ").title()
+
+
 def analog_diversity_report(
     ranked: list[AnalogResult],
     episode_by_setup_id: dict[str, SetupEpisode],
@@ -304,14 +313,24 @@ def analog_diversity_report(
     warnings = []
     if max_same_episode_count > 1:
         repeated = sorted(eid for eid, count in episode_counts.items() if count > 1)
-        extra = f" (+{len(repeated) - 1} more repeated episodes)" if len(repeated) > 1 else ""
+        # #10: the raw episode id (a setup-type-prefixed content hash) is
+        # developer/debugging detail, not something a reader can act on --
+        # the warning shown in normal UI names the episode by its readable
+        # setup type instead, never the hash itself.
+        top_label = _readable_episode_label(repeated[0])
+        extra_count = len(repeated) - 1
+        extra = (
+            f" (and {extra_count} more repeated episode{'s' if extra_count != 1 else ''})"
+            if extra_count
+            else ""
+        )
         warnings.append(
-            f"SAME_EPISODE_ANALOGS: {max_same_episode_count} of the top {n} analogs share "
-            f"episode {repeated[0]}{extra}"
+            f"{max_same_episode_count} of the top {n} analogs came from the same "
+            f"{top_label} episode{extra}."
         )
     if dominant_symbol_share is not None and dominant_symbol_share >= config.concentration_warning_share:
         warnings.append(
-            f"SYMBOL_CONCENTRATION: {dominant_symbol_share:.0%} of the top {n} analogs are {dominant_symbol}"
+            f"{dominant_symbol_share:.0%} of the top {n} analogs are {dominant_symbol}."
         )
 
     return AnalogDiversityReport(

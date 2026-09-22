@@ -4,8 +4,11 @@ import { useEffect, useState } from "react";
 
 import { getCatalystEvent, getCatalystReaction, getWatchlist, getWhatsMoving } from "@/lib/api";
 import {
+  catalystRelevanceColorClass,
   formatCatalystCategory,
+  formatCatalystRelevance,
   formatClockTime,
+  formatExchangeTimestamp,
   formatRatio,
   formatSignedPercent,
   formatSourceCount,
@@ -51,6 +54,14 @@ function EventCard({ event }: { event: CatalystEvent }) {
             <span className="rounded bg-muted/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">
               {formatCatalystCategory(event.category)}
             </span>
+            {/* (#14) Relevance is a separate dimension from category -- a
+                background/general-investing article must never look like a
+                primary market-moving catalyst just because it's listed here. */}
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide ${catalystRelevanceColorClass(event.relevance)}`}
+            >
+              {formatCatalystRelevance(event.relevance)}
+            </span>
             {event.affected_symbols.map((symbol) => (
               <span key={symbol} className="font-mono text-[10px] font-semibold text-foreground">
                 {symbol}
@@ -60,6 +71,10 @@ function EventCard({ event }: { event: CatalystEvent }) {
           <p className="mt-1 text-xs text-foreground">{event.title}</p>
           <p className="mt-0.5 text-[11px] text-muted">
             {formatClockTime(event.primary_timestamp)} · {formatSourceCount(event.source_count)}
+            {event.primary_source ? ` · ${event.primary_source}` : ""}
+          </p>
+          <p className="text-[10px] text-muted" title="Exact publication timestamp of the anchor article">
+            Published {formatExchangeTimestamp(event.earliest_published_at)}
           </p>
         </div>
         <span className="text-[11px] text-muted">{expanded ? "▲" : "▼"}</span>

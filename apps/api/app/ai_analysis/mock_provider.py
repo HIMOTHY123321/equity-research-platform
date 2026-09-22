@@ -15,6 +15,7 @@ from app.ai_analysis.claims import ClaimDirection, EvidenceClaim
 from app.ai_analysis.provider import AIAnalysisProvider
 from app.ai_analysis.research_brief import RESEARCH_BRIEF_PROMPT_VERSION, AnalysisMode, ResearchBrief
 from app.ai_analysis.schemas import EvidencePacket
+from app.ai_analysis.timestamps import format_exchange_timestamp as _format_exchange_timestamp
 
 
 def _claims_by_direction(claims: list[EvidenceClaim], direction: ClaimDirection) -> list[EvidenceClaim]:
@@ -86,13 +87,34 @@ def _build_why_this_setup(*, packet, situation_summary, invalidation, **_kw) -> 
     }
 
 
+def _rejected_alternative_sentence(alt) -> str:
+    """(#7) '{Setup Type} — rejected / Reason: ... / Observed: X / Required: Y'
+    built entirely from the candidate's own EvidenceCheck -- never invented."""
+    parts = [f"{alt.setup_type.replace('_', ' ').title()} ({alt.direction}) — rejected"]
+    if alt.failed_requirement:
+        parts.append(f"Reason: {alt.failed_requirement}")
+    if alt.observed_value is not None:
+        parts.append(f"Observed: {alt.observed_value:g}")
+    if alt.required_value is not None:
+        parts.append(f"Required: {alt.required_value:g}")
+    if alt.conflict:
+        parts.append(f"Conflict: {alt.conflict}")
+    return " / ".join(parts)
+
+
 def _build_why_not(*, packet, situation_summary, **_kw) -> dict:
     section = packet.setup
-    if section is None or (section.qualified and not section.near_miss_reasons):
+    rejected_alternatives = section.rejected_alternatives if section is not None else []
+    alternative_sentences = [_rejected_alternative_sentence(a) for a in rejected_alternatives]
+
+    if section is None or (
+        section.qualified and not section.near_miss_reasons and not rejected_alternatives
+    ):
         return {
             "situation_summary": situation_summary,
             "setup_explanation": "This packet has no rejected alternative or near-miss candidate to "
-            "explain -- WHY NOT is only meaningful when a candidate failed to qualify.",
+            "explain -- WHY NOT is only meaningful when a candidate failed to qualify. No other "
+            "candidate from this detection snapshot was rejected either.",
             "supporting_evidence": [],
             "contradictory_evidence": [],
             "catalyst_context": "",
@@ -106,11 +128,17 @@ def _build_why_not(*, packet, situation_summary, **_kw) -> dict:
         if not section.qualified
         else "This candidate qualified, but the following near-misses/conflicts were also observed."
     )
+    if not alternative_sentences:
+        alternative_sentences = [
+            "No other candidate from this detection snapshot was rejected -- nothing to compare against."
+        ]
     return {
         "situation_summary": situation_summary,
         "setup_explanation": explanation,
         "supporting_evidence": [],
-        "contradictory_evidence": section.rejection_reasons or section.conflict_reasons,
+        "contradictory_evidence": (
+            (section.rejection_reasons or section.conflict_reasons) + alternative_sentences
+        ),
         "catalyst_context": "",
         "historical_context": "",
         "uncertainty": section.near_miss_reasons,
@@ -227,7 +255,7 @@ class MockAIAnalysisProvider(AIAnalysisProvider):
         invalidation = self.generate_monitoring_summary(packet, claims)
 
         situation_summary = (
-            f"{packet.symbol} ({packet.timeframe}) as of {packet.as_of.isoformat()}. "
+            f"{packet.symbol} ({packet.timeframe}) as of {_format_exchange_timestamp(packet.as_of)}. "
             f"RANKING GATE: {packet.ranking_gate_status}."
         )
         catalyst_text = (

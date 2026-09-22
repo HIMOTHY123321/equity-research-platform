@@ -5,8 +5,11 @@ import { useState, type ReactNode } from "react";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
 import { getCatalystReaction } from "@/lib/api";
 import {
+  catalystRelevanceColorClass,
   formatCatalystCategory,
+  formatCatalystRelevance,
   formatClockTime,
+  formatExchangeTimestamp,
   formatRatio,
   formatSignedPercent,
   formatSourceCount,
@@ -66,12 +69,21 @@ function TimelineItem({
       <span className="absolute -left-[5px] top-1 h-2 w-2 rounded-full bg-accent" />
       <button type="button" onClick={toggle} className="flex w-full items-start justify-between gap-2 text-left">
         <div>
-          <div className="flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center gap-1.5">
             <span className="rounded bg-muted/15 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-wide text-muted">
               {formatCatalystCategory(event.category)}
             </span>
+            {/* (#14) Relevance is a separate dimension from category -- shown
+                so a background/general-investing article never reads as a
+                primary market-moving catalyst just because it's tagged. */}
+            <span
+              className={`rounded px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide ${catalystRelevanceColorClass(event.relevance)}`}
+            >
+              {formatCatalystRelevance(event.relevance)}
+            </span>
             <span className="text-[11px] text-muted">
               {formatClockTime(event.primary_timestamp)} · {formatSourceCount(event.source_count)}
+              {event.primary_source ? ` · ${event.primary_source}` : ""}
             </span>
           </div>
           <p className="mt-0.5 text-xs text-foreground">{event.title}</p>
@@ -84,6 +96,23 @@ function TimelineItem({
           <TimelineStep label="Catalyst">
             {formatCatalystCategory(event.category)} · {formatSourceCount(event.source_count)}
           </TimelineStep>
+          <TimelineStep label="Published">
+            {formatExchangeTimestamp(event.earliest_published_at)}
+            {event.primary_source ? ` · ${event.primary_source}` : ""}
+          </TimelineStep>
+          {event.primary_url && (
+            <TimelineStep label="Source">
+              <a
+                href={event.primary_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="text-accent underline"
+              >
+                Open article ↗
+              </a>
+            </TimelineStep>
+          )}
           <TimelineStep label="Price">
             {loading && "Loading…"}
             {!loading && oneHour && (

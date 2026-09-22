@@ -578,6 +578,11 @@ class CatalystEventRecord(Base):
     latest_update_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     title: Mapped[str] = mapped_column(String(500))
     provenance: Mapped[dict] = mapped_column(JSON, default=dict)
+    # (#13/#14) POST-BROWSER-TEST CORRECTION PASS #2: deterministic
+    # relevance classification + anchor-article source/link enrichment.
+    relevance: Mapped[str] = mapped_column(String(16), default="unknown")
+    primary_source: Mapped[Optional[str]] = mapped_column(String(200), nullable=True)
+    primary_url: Mapped[Optional[str]] = mapped_column(String(2000), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 

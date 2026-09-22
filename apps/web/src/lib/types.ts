@@ -1039,6 +1039,10 @@ export interface AnalogResult {
   setup_id: string;
   symbol: string;
   timestamp: string;
+  // (#9) The entry's own detection timeframe -- daily-timeframe entries have
+  // a genuinely midnight `timestamp` (the daily bar's own open), not a
+  // fabricated one. Used to decide date-only vs full HH:MM:SS display.
+  timeframe: string;
   setup_type: string;
   direction: string;
   distance: AnalogDistance;
@@ -1060,6 +1064,9 @@ export interface AnalogQueryResponse {
   analogs: AnalogResult[];
   diversity: AnalogDiversityReport;
   diverse_analogs: AnalogResult[];
+  // (#12) Describes `diverse_analogs`, not `analogs` -- the UI must switch
+  // to this report when the diverse list is what's actually displayed.
+  diverse_analogs_diversity: AnalogDiversityReport;
   catalyst_context_applied: boolean;
   // Hardening pass (§T): set only when the corpus itself can't support a
   // genuinely cross-symbol-diverse result -- the UI must show this instead
@@ -1155,6 +1162,8 @@ export interface NormalizedNewsArticle {
   ingested_at: string;
 }
 
+export type CatalystRelevance = "primary" | "background" | "unknown";
+
 export interface CatalystEvent {
   event_id: string;
   primary_timestamp: string;
@@ -1166,6 +1175,11 @@ export interface CatalystEvent {
   latest_update_at: string;
   title: string;
   provenance: Record<string, unknown>;
+  // (#13/#14) POST-BROWSER-TEST CORRECTION PASS #2 enrichment -- sourced
+  // from the anchor contributing article, never fabricated when absent.
+  relevance: CatalystRelevance;
+  primary_source: string | null;
+  primary_url: string | null;
 }
 
 export type ReactionSessionKind = "pre_market" | "regular" | "after_hours" | "weekend_non_trading";
@@ -1251,6 +1265,16 @@ export interface CatalystResearchQueryResponse extends ResearchQueryResponse {
 // independently grounded against those same fields server-side
 // (app.ai_analysis.validation) before it is ever returned here.
 
+export interface RejectedAlternative {
+  setup_id: string;
+  setup_type: string;
+  direction: string;
+  failed_requirement: string | null;
+  observed_value: number | null;
+  required_value: number | null;
+  conflict: string | null;
+}
+
 export interface EvidenceSetupSection {
   candidate: SetupCandidate;
   qualified: boolean;
@@ -1258,6 +1282,7 @@ export interface EvidenceSetupSection {
   rejection_reasons: string[];
   near_miss_reasons: string[];
   conflict_reasons: string[];
+  rejected_alternatives: RejectedAlternative[];
 }
 
 export interface EvidenceDataQuality {

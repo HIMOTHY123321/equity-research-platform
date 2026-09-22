@@ -45,11 +45,18 @@ from app.ai_analysis.research_brief import ResearchBrief
 from app.ai_analysis.schemas import EvidencePacket
 
 _NUMBER_PATTERN = re.compile(r"-?\d+(?:\.\d+)?")
-# ISO-8601 timestamps are legitimate prose (e.g. "as of 2026-09-01T12:00:00Z")
-# but their digits are not "facts" the numeric-grounding check should try to
-# trace back to packet data -- stripped before that check runs.
+# Timestamps are legitimate prose (e.g. "as of 2026-09-01T12:00:00Z", or the
+# exchange-local "2026-09-21 19:52:29 EDT" format `format_exchange_timestamp`
+# produces -- #5/#7 hardening) but their digits are not "facts" the
+# numeric-grounding check should try to trace back to packet data, so both
+# forms are stripped before that check runs. Without the second alternative,
+# a correctly-timezone-converted display timestamp reads as several
+# ungrounded numbers (hour/minute/second) and gets rejected exactly like an
+# AI-invented figure would -- it isn't one, it's the same `as_of`/
+# `generated_at` instant already present (and grounded) as an ISO string.
 _ISO_DATETIME_PATTERN = re.compile(
-    r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?)?"
+    r"\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?"
+    r"|\s\d{2}:\d{2}:\d{2}(?:\s[A-Z]{2,5})?)?"
 )
 
 # Small connective integers (bar counts, horizon counts, list lengths) that
@@ -144,6 +151,11 @@ def _packet_numbers(packet: EvidencePacket) -> set[float]:
     if packet.setup is not None:
         for criterion in packet.setup.candidate.invalidation_criteria:
             add_text(criterion)
+        for alt in packet.setup.rejected_alternatives:
+            add(alt.observed_value)
+            add(alt.required_value)
+            if alt.failed_requirement:
+                add_text(alt.failed_requirement)
 
     sr = packet.support_resistance
     for zone in (sr.nearest_support, sr.nearest_resistance):
@@ -184,6 +196,9 @@ def _packet_numbers(packet: EvidencePacket) -> set[float]:
         add(len(analogs.analogs))
         add(analogs.diversity.distinct_episode_count)
         add(analogs.diversity.distinct_symbol_count)
+        add(analogs.diversity.max_same_episode_count)
+        if analogs.diversity.dominant_symbol_share is not None:
+            add(round(analogs.diversity.dominant_symbol_share * 100))
 
     return numbers
 

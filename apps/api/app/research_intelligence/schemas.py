@@ -379,6 +379,12 @@ class AnalogResult(BaseModel):
     setup_id: str
     symbol: str
     timestamp: datetime
+    # (#9) The setup's own detection timeframe -- a daily-timeframe entry's
+    # `timestamp` is genuinely midnight (a daily bar's own open), not a
+    # fabricated/truncated intraday time. The UI uses this to decide whether
+    # to render full HH:MM:SS precision or an honest date-only label, rather
+    # than ever inventing a 00:00:00 for a timeframe that has none.
+    timeframe: str
     setup_type: str
     direction: str
     distance: AnalogDistance

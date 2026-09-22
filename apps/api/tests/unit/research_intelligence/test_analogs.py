@@ -418,7 +418,7 @@ def test_analog_diversity_report_flags_repeated_episode():
     assert report.distinct_episode_count == 1
     assert report.analogs_without_episode_data == 1  # "c"
     assert report.warning is not None
-    assert "SAME_EPISODE_ANALOGS" in report.warning
+    assert "came from the same Episode-1 episode" in report.warning
 
 
 def test_analog_diversity_report_flags_symbol_concentration():
@@ -426,7 +426,7 @@ def test_analog_diversity_report_flags_symbol_concentration():
     report = analog_diversity_report(ranked, {})
     assert report.dominant_symbol == "SPY"
     assert report.dominant_symbol_share == 0.75
-    assert "SYMBOL_CONCENTRATION" in report.warning
+    assert "75% of the top 4 analogs are SPY" in report.warning
 
 
 def test_analog_diversity_report_no_warning_when_genuinely_diverse():

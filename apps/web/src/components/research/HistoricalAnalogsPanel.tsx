@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 
-import { formatExchangeTimestamp, formatSignedPercent } from "@/lib/format";
+import { formatAnalogTimestamp, formatSignedPercent } from "@/lib/format";
 import type { AnalogDiversityReport, AnalogResult } from "@/lib/types";
 
 function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetupType?: string }) {
@@ -20,10 +20,19 @@ function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetu
       >
         <span className="flex items-center gap-3">
           <span className="font-mono text-foreground">{analog.symbol}</span>
-          {/* (§P) The real detection timestamp, exchange-timezone-aware --
-              never the browser's own local time, and never silently
-              truncated to a session date for an intraday setup. */}
-          <span className="text-muted">{formatExchangeTimestamp(analog.timestamp)}</span>
+          {/* (§P/#9) The real detection timestamp, exchange-timezone-aware --
+              never the browser's own local time. Daily-timeframe entries
+              show an honest date-only label instead of a fabricated
+              00:00:00 clock time; finer timeframes show the real detection
+              time, never silently truncated to a session date. */}
+          {(() => {
+            const { text, dateOnly } = formatAnalogTimestamp(analog.timestamp, analog.timeframe);
+            return (
+              <span className="text-muted" title={dateOnly ? "Only a date is stored for this daily-timeframe setup -- no intraday detection time exists." : undefined}>
+                {text}
+              </span>
+            );
+          })()}
           <span className="text-muted">{analog.setup_type.replace(/_/g, " ")}</span>
           <span className="text-muted">{analog.direction}</span>
           {querySetupType !== undefined && (
@@ -36,8 +45,13 @@ function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetu
             </span>
           )}
         </span>
-        <span className="font-mono text-accent" title="Lower distance = more similar. Normalized across matched feature dimensions -- expand for the contributing dimensions.">
-          distance {analog.distance.distance.toFixed(3)}
+        <span className="flex flex-col items-end">
+          <span className="font-mono text-accent" title="Lower distance = more similar. Normalized across matched feature dimensions -- expand for the contributing dimensions.">
+            distance {analog.distance.distance.toFixed(3)}
+          </span>
+          {/* (#11) Visible, not just a hover tooltip -- distance is not a
+              probability or confidence score, only a similarity ranking. */}
+          <span className="text-[9px] text-muted">Lower = more similar</span>
         </span>
       </button>
       {expanded && (
@@ -102,12 +116,17 @@ export function HistoricalAnalogsPanel({
   analogs,
   diversity,
   diverseAnalogs,
+  diverseAnalogsDiversity,
   diversityUnavailableReason,
   querySetupType,
 }: {
   analogs: AnalogResult[];
   diversity?: AnalogDiversityReport;
   diverseAnalogs?: AnalogResult[];
+  /** (#12) Describes `diverseAnalogs`, not `analogs` -- shown instead of
+   * `diversity` whenever the diverse list is the one on screen, so the
+   * warning always matches the actual displayed row count. */
+  diverseAnalogsDiversity?: AnalogDiversityReport;
   /** Hardening pass (§T): when set, the corpus itself can't support a
    * genuinely cross-symbol-diverse result -- shown explicitly rather than
    * silently hiding the diverse-analogs control, which would otherwise
@@ -126,6 +145,7 @@ export function HistoricalAnalogsPanel({
   // toggling only switches which already-computed list is displayed.
   const canShowDiverse = diverseAnalogs !== undefined && diverseAnalogs.length < analogs.length;
   const displayed = showDiverse && diverseAnalogs ? diverseAnalogs : analogs;
+  const activeDiversity = showDiverse ? diverseAnalogsDiversity : diversity;
 
   return (
     <div>
@@ -141,14 +161,14 @@ export function HistoricalAnalogsPanel({
           </button>
         )}
       </div>
-      {!canShowDiverse && diversityUnavailableReason && (
+      {(showDiverse || !canShowDiverse) && diversityUnavailableReason && (
         <p className="mb-2 rounded border border-border bg-surface-raised px-2 py-1 text-[11px] text-muted">
           {diversityUnavailableReason}
         </p>
       )}
-      {diversity?.warning && (
+      {activeDiversity?.warning && (
         <p className="mb-2 rounded border border-amber-500/40 bg-amber-500/5 px-2 py-1 text-[11px] text-amber-600 dark:text-amber-400">
-          {diversity.warning}
+          {activeDiversity.warning}
         </p>
       )}
       <ul className="space-y-1.5">

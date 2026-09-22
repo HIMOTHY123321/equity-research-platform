@@ -21,6 +21,43 @@ from pydantic import BaseModel, ConfigDict
 from app.ai_analysis.schemas import EvidencePacket
 from app.research_intelligence.schemas import ConclusionLabel, ContradictionStatus, EvidenceMaturity
 
+_SMALL_NUMBER_WORDS = [
+    "zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
+    "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen", "eighteen",
+    "nineteen", "twenty",
+]
+
+_TIMEFRAME_PHRASES = {
+    "1m": "the 1-minute timeframe",
+    "5m": "the 5-minute timeframe",
+    "15m": "the 15-minute timeframe",
+    "1h": "the hourly timeframe",
+    "4h": "the 4-hour timeframe",
+    "1d": "the daily timeframe",
+}
+
+
+def _spell_count(count: int) -> str:
+    if 0 <= count < len(_SMALL_NUMBER_WORDS):
+        return _SMALL_NUMBER_WORDS[count]
+    return str(count)
+
+
+def _timeframe_phrase(timeframe) -> str:
+    key = timeframe.value if hasattr(timeframe, "value") else str(timeframe)
+    return _TIMEFRAME_PHRASES.get(key, f"the {key} timeframe")
+
+
+def _count_sentence(count: int, noun_singular: str, noun_plural: str, timeframe) -> str:
+    """Grammatically correct, deterministic count sentence -- e.g. 'Ten
+    breaks of structure were observed on the daily timeframe.' Replaces the
+    earlier '{n} break(s) of structure observed on {tf.value}' template,
+    which read as unfinished/ungrammatical prose regardless of count."""
+    noun = noun_singular if count == 1 else noun_plural
+    verb = "was" if count == 1 else "were"
+    spelled = _spell_count(count)
+    return f"{spelled.capitalize()} {noun} {verb} observed on {_timeframe_phrase(timeframe)}."
+
 
 class ClaimDirection(str, Enum):
     SUPPORTING = "supporting"
@@ -116,8 +153,10 @@ def derive_evidence_claims(packet: EvidencePacket) -> list[EvidenceClaim]:
     if structure.breaks_of_structure:
         add(
             "break_of_structure",
-            f"{len(structure.breaks_of_structure)} break(s) of structure observed on "
-            f"{structure.timeframe.value}.",
+            _count_sentence(
+                len(structure.breaks_of_structure), "break of structure", "breaks of structure",
+                structure.timeframe,
+            ),
             ["structure:breaks_of_structure"],
             ClaimDirection.SUPPORTING,
             ClaimStrength.NOT_APPLICABLE,
@@ -125,8 +164,10 @@ def derive_evidence_claims(packet: EvidencePacket) -> list[EvidenceClaim]:
     if structure.changes_of_character:
         add(
             "change_of_character",
-            f"{len(structure.changes_of_character)} change(s) of character observed on "
-            f"{structure.timeframe.value}.",
+            _count_sentence(
+                len(structure.changes_of_character), "change of character", "changes of character",
+                structure.timeframe,
+            ),
             ["structure:changes_of_character"],
             ClaimDirection.CONTRADICTING,
             ClaimStrength.NOT_APPLICABLE,

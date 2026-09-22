@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { TopNav } from "@/components/TopNav";
@@ -18,6 +19,7 @@ type LoadState = "loading" | "ready" | "error";
  * from current market state.
  */
 export default function ReportsPage() {
+  const router = useRouter();
   const [items, setItems] = useState<BriefListItem[]>([]);
   const [state, setState] = useState<LoadState>("loading");
 
@@ -60,11 +62,27 @@ export default function ReportsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item) => (
-                    <tr key={item.brief_id} className="border-b border-border/60 last:border-0 hover:bg-surface-raised/50">
+                  {items.map((item) => {
+                    const href = `/reports/${item.symbol}/${item.brief_id}`;
+                    return (
+                    <tr
+                      key={item.brief_id}
+                      role="link"
+                      tabIndex={0}
+                      aria-label={`Open ${item.symbol} report`}
+                      onClick={() => router.push(href)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          router.push(href);
+                        }
+                      }}
+                      className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-surface-raised/50 focus-visible:bg-surface-raised/50 focus-visible:outline-none"
+                    >
                       <td className="px-3 py-2">
                         <Link
-                          href={`/reports/${item.symbol}/${item.brief_id}`}
+                          href={href}
+                          onClick={(e) => e.stopPropagation()}
                           className="font-semibold text-foreground hover:text-accent"
                         >
                           {item.symbol}
@@ -80,7 +98,8 @@ export default function ReportsPage() {
                       </td>
                       <td className="px-3 py-2 text-muted">{item.prompt_version}</td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

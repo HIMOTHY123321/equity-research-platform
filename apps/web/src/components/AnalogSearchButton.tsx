@@ -48,6 +48,7 @@ export function AnalogSearchButton({
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
   const [diversity, setDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
+  const [diverseAnalogsDiversity, setDiverseAnalogsDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diversityUnavailableReason, setDiversityUnavailableReason] = useState<string | null>(null);
   const [sampleFlags, setSampleFlags] = useState<EvidenceQualityFlagKind[]>([]);
 
@@ -70,6 +71,7 @@ export function AnalogSearchButton({
       setAnalogs(res.analogs);
       setDiversity(res.diversity);
       setDiverseAnalogs(res.diverse_analogs);
+      setDiverseAnalogsDiversity(res.diverse_analogs_diversity);
       setDiversityUnavailableReason(res.diversity_unavailable_reason ?? null);
 
       // (#29) Best-effort only -- this same quick corpus's independence
@@ -124,6 +126,7 @@ export function AnalogSearchButton({
             analogs={analogs}
             diversity={diversity ?? undefined}
             diverseAnalogs={diverseAnalogs ?? undefined}
+            diverseAnalogsDiversity={diverseAnalogsDiversity ?? undefined}
             diversityUnavailableReason={diversityUnavailableReason}
             querySetupType={candidate.setup_type}
           />

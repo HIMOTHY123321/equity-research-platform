@@ -34,7 +34,9 @@ from app.ai_analysis.schemas import (
     EvidencePacket,
     EvidenceProvenance,
     EvidenceSetupSection,
+    RejectedAlternative,
 )
+from app.ai_analysis.timestamps import format_exchange_timestamp as _format_exchange_timestamp
 from app.api.routes.market import CANDLE_LIMIT_BY_TIMEFRAME
 from app.api.routes.research_catalysts import (
     CatalystResearchQueryRequest,
@@ -97,11 +99,39 @@ def _find_candidate(snapshot: SetupDetectionSnapshot, setup_id: str) -> Optional
     return None
 
 
-def _build_setup_section(candidate: SetupCandidate) -> EvidenceSetupSection:
+_MAX_REJECTED_ALTERNATIVES = 5
+
+
+def _rejected_alternative(candidate: SetupCandidate) -> RejectedAlternative:
+    """(#7) The candidate's own first failed hard requirement, verbatim --
+    never a reworded or invented explanation."""
+    first_failed = next((c for c in candidate.hard_checks if not c.passed), None)
+    conflict = candidate.conflicts[0].label if candidate.conflicts else None
+    return RejectedAlternative(
+        setup_id=candidate.id,
+        setup_type=candidate.setup_type.value,
+        direction=candidate.direction.value,
+        failed_requirement=first_failed.label if first_failed else None,
+        observed_value=first_failed.actual if first_failed else None,
+        required_value=first_failed.required if first_failed else None,
+        conflict=conflict,
+    )
+
+
+def _build_setup_section(
+    candidate: SetupCandidate, snapshot: Optional[SetupDetectionSnapshot] = None
+) -> EvidenceSetupSection:
     qualification_reasons = [c.label for c in candidate.hard_checks if c.passed]
     rejection_reasons = [c.label for c in candidate.hard_checks if not c.passed]
     near_miss_reasons = [c.label for c in candidate.soft_checks if not c.passed]
     conflict_reasons = [c.label for c in candidate.conflicts]
+    rejected_alternatives = []
+    if snapshot is not None:
+        rejected_alternatives = [
+            _rejected_alternative(other)
+            for other in snapshot.rejected_candidates
+            if other.id != candidate.id
+        ][:_MAX_REJECTED_ALTERNATIVES]
     return EvidenceSetupSection(
         candidate=candidate,
         qualified=candidate.current_state.value in ("qualified", "triggered"),
@@ -109,6 +139,7 @@ def _build_setup_section(candidate: SetupCandidate) -> EvidenceSetupSection:
         rejection_reasons=rejection_reasons,
         near_miss_reasons=near_miss_reasons,
         conflict_reasons=conflict_reasons,
+        rejected_alternatives=rejected_alternatives,
     )
 
 
@@ -231,8 +262,9 @@ def build_evidence_packet(
     ):
         missing_evidence.append("market_data")
         research_limitations.append(
-            f"Market data could not be reconstructed back to as_of={resolved_as_of.isoformat()} "
-            "-- provider retention/history does not reach that far."
+            f"Market data could not be reconstructed back to as_of="
+            f"{_format_exchange_timestamp(resolved_as_of)} -- provider retention/history "
+            "does not reach that far."
         )
 
     setup_section: Optional[EvidenceSetupSection] = None
@@ -241,7 +273,7 @@ def build_evidence_packet(
         candidate = _find_candidate(setup_snapshot, setup_id)
         if candidate is None:
             raise SetupNotFoundError(setup_id)
-        setup_section = _build_setup_section(candidate)
+        setup_section = _build_setup_section(candidate, setup_snapshot)
 
     matching_runs = _matching_runs(research_repository, symbol, timeframe.value, resolved_as_of)
     run_ids = [run.id for run in matching_runs]

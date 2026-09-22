@@ -40,6 +40,7 @@ import hashlib
 import re
 
 from app.news.config import DEFAULT_CATALYST_CONFIG, CatalystConfig
+from app.news.relevance import classify_relevance
 from app.news.schemas import CatalystCategory, CatalystEvent, NormalizedNewsArticle
 
 # Common English function words carrying no distinguishing meaning for
@@ -100,6 +101,9 @@ def _build_event(members: list[NormalizedNewsArticle]) -> CatalystEvent:
         latest_update_at=ordered[-1].published_at,
         title=anchor.headline,
         provenance={"member_count": len(ordered)},
+        relevance=classify_relevance(anchor.classification.category, anchor.headline),
+        primary_source=anchor.source,
+        primary_url=anchor.url,
     )
 
 

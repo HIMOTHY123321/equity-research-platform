@@ -199,6 +199,27 @@ export function isExchangeMidnight(iso: string): boolean {
   return get("hour") === "00" && get("minute") === "00" && get("second") === "00";
 }
 
+const _EXCHANGE_DATE_ONLY = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+/** (#9) A daily-timeframe analog's `timestamp` is genuinely midnight -- the
+ * daily bar's own open, not a fabricated intraday time -- so it's shown as
+ * a date only, honestly labeled as date-level evidence, rather than with a
+ * "00:00:00" that reads as false intraday precision. Any finer timeframe
+ * shows the real detection clock time via `formatExchangeTimestamp`. */
+export function formatAnalogTimestamp(iso: string, timeframe: string): { text: string; dateOnly: boolean } {
+  if (timeframe === "1d" || timeframe === "1w") {
+    const parts = _EXCHANGE_DATE_ONLY.formatToParts(new Date(iso));
+    const get = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+    return { text: `${get("year")}-${get("month")}-${get("day")} (date-level)`, dateOnly: true };
+  }
+  return { text: formatExchangeTimestamp(iso), dateOnly: false };
+}
+
 /** Daily-timeframe candle timestamps sit at midnight -- a clock time is
  * meaningless there, so show the calendar date instead. */
 export function formatDetectionTime(iso: string, timeframe: string): string {
@@ -274,6 +295,24 @@ const CATALYST_CATEGORY_LABELS: Record<string, string> = {
 
 export function formatCatalystCategory(category: string): string {
   return CATALYST_CATEGORY_LABELS[category] ?? category;
+}
+
+const CATALYST_RELEVANCE_LABELS: Record<string, string> = {
+  primary: "PRIMARY / MARKET-MOVING",
+  background: "BACKGROUND / LOW RELEVANCE",
+  unknown: "UNKNOWN / UNCLASSIFIED",
+};
+
+export function formatCatalystRelevance(relevance: string): string {
+  return CATALYST_RELEVANCE_LABELS[relevance] ?? relevance.toUpperCase();
+}
+
+/** (#14) Never green/positive-toned for BACKGROUND -- a low-relevance
+ * article must read as visually de-emphasized, not as a confirmed catalyst. */
+export function catalystRelevanceColorClass(relevance: string): string {
+  if (relevance === "primary") return "bg-accent/15 text-accent";
+  if (relevance === "background") return "bg-muted/15 text-muted";
+  return "bg-muted/10 text-muted";
 }
 
 const CATALYST_CONTEXT_LABELS: Record<string, string> = {

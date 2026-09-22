@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { TopNav } from "@/components/TopNav";
@@ -163,13 +164,27 @@ function WatchlistPageRow({
   streamingActive: boolean;
   onRemove: () => void;
 }) {
+  const router = useRouter();
   const { quote } = useLiveSymbol(ticker, ["1h"], "watchlist");
   const freshness = quote?.freshness;
+  const href = `/?symbol=${ticker}`;
 
   return (
-    <tr className="border-b border-border/60 last:border-0 hover:bg-surface-raised/50">
+    <tr
+      role="link"
+      tabIndex={0}
+      aria-label={`Open ${ticker} on Overview`}
+      onClick={() => router.push(href)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          router.push(href);
+        }
+      }}
+      className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-surface-raised/50 focus-visible:bg-surface-raised/50 focus-visible:outline-none"
+    >
       <td className="px-3 py-2">
-        <Link href={`/?symbol=${ticker}`} className="font-semibold text-foreground hover:text-accent">
+        <Link href={href} onClick={(e) => e.stopPropagation()} className="font-semibold text-foreground hover:text-accent">
           {ticker}
         </Link>
       </td>
@@ -204,7 +219,10 @@ function WatchlistPageRow({
       <td className="px-3 py-2 text-right">
         <button
           type="button"
-          onClick={onRemove}
+          onClick={(e) => {
+            e.stopPropagation();
+            onRemove();
+          }}
           aria-label={`Remove ${ticker}`}
           className="text-[11px] text-muted hover:text-negative"
         >

@@ -72,6 +72,36 @@ def test_setup_scoped_packet_includes_setup_section():
     assert packet.setup.candidate.id == setup_id
 
 
+def test_rejected_alternatives_never_include_the_bound_candidate_itself():
+    """(#7 hardening) WHY NOT depth: other rejected candidates from the same
+    detection snapshot are surfaced, but the packet's own bound candidate
+    (whatever its own state) is never listed as an "alternative" to itself."""
+    as_of = _as_of()
+    provider = FakeMarketDataProvider()
+    snapshot = build_market_snapshot("SPY", Timeframe.ONE_HOUR, provider, as_of)
+    setup_snapshot = snapshot.setup_snapshot
+    assert setup_snapshot.rejected_candidates, "fixture must produce a rejected candidate to test against"
+    setup_id = setup_snapshot.rejected_candidates[0].id
+
+    session = make_session()
+    research_repository, news_repository = make_repositories(session)
+    packet = build_evidence_packet(
+        symbol="SPY",
+        timeframe=Timeframe.ONE_HOUR,
+        market_provider=provider,
+        news_provider=FixtureNewsProvider([]),
+        news_repository=news_repository,
+        research_repository=research_repository,
+        setup_id=setup_id,
+        as_of=as_of,
+    )
+    assert packet.setup is not None
+    alternative_ids = {alt.setup_id for alt in packet.setup.rejected_alternatives}
+    assert setup_id not in alternative_ids
+    if len(setup_snapshot.rejected_candidates) > 1:
+        assert alternative_ids, "other rejected candidates exist and must be surfaced"
+
+
 def test_unknown_setup_id_raises_setup_not_found():
     session = make_session()
     research_repository, news_repository = make_repositories(session)

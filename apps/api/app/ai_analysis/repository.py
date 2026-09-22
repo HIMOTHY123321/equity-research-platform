@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import select
@@ -158,11 +158,26 @@ class SqlAlchemyEvidenceRepository(EvidenceRepository):
                 provider=brief.provider,
                 model=brief.model,
                 prompt_version=brief.prompt_version,
-                generated_at=_parse_generated_at(brief.payload.get("generated_at"), brief.as_of),
-                as_of=brief.as_of,
+                generated_at=_ensure_utc(
+                    _parse_generated_at(brief.payload.get("generated_at"), brief.as_of)
+                ),
+                as_of=_ensure_utc(brief.as_of),
             )
             for brief, packet in rows
         ]
+
+
+def _ensure_utc(value: datetime) -> datetime:
+    """SQLite has no native timezone type: SQLAlchemy's `DateTime(timezone=True)`
+    stores the instant correctly but returns a *naive* datetime on read-back
+    (verified: a tz-aware UTC insert round-trips with `tzinfo=None`). Every
+    value this repository writes is UTC to begin with (`packet.as_of`/
+    `brief.as_of` are always UTC-aware at creation), so a naive read-back is
+    re-tagged as UTC rather than left ambiguous -- leaving it naive caused the
+    frontend to interpret the raw UTC digits as local wall-clock time, then
+    apply a redundant EDT/EST conversion on top, producing an ~4h-shifted
+    "Market as-of" timestamp on the Reports page."""
+    return value if value.tzinfo is not None else value.replace(tzinfo=timezone.utc)
 
 
 def _parse_generated_at(raw: Optional[str], fallback: datetime) -> datetime:

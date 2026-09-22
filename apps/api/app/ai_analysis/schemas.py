@@ -48,6 +48,24 @@ class EvidenceMode(str, Enum):
 RANKING_GATE_STATUS = "FAIL"
 
 
+class RejectedAlternative(BaseModel):
+    """(#7 hardening) One OTHER candidate from the same detection snapshot
+    that did NOT qualify -- never the packet's own bound candidate. Built
+    verbatim from that candidate's own `EvidenceCheck` (the first failed
+    hard requirement), so `observed_value`/`required_value` are real
+    detection-time numbers, never invented ones."""
+
+    model_config = ConfigDict(frozen=True)
+
+    setup_id: str
+    setup_type: str
+    direction: str
+    failed_requirement: Optional[str] = None
+    observed_value: Optional[float] = None
+    required_value: Optional[float] = None
+    conflict: Optional[str] = None
+
+
 class EvidenceSetupSection(BaseModel):
     """The target setup candidate plus deterministic, template-built
     explanations of why it qualified/was rejected -- reusing
@@ -63,6 +81,9 @@ class EvidenceSetupSection(BaseModel):
     rejection_reasons: list[str] = []
     near_miss_reasons: list[str] = []
     conflict_reasons: list[str] = []
+    # (#7) Other, genuinely-rejected candidates from the same detection
+    # snapshot -- empty means none existed, never a placeholder/invented one.
+    rejected_alternatives: list[RejectedAlternative] = []
 
 
 class EvidenceDataQuality(BaseModel):

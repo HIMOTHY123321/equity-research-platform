@@ -117,6 +117,18 @@ class NormalizedNewsArticle(BaseModel):
     ingested_at: datetime
 
 
+class CatalystRelevance(str, Enum):
+    """(#14) A SEPARATE dimension from `CatalystCategory` -- whether this is
+    a genuine, discrete, market-moving event versus general investing
+    commentary that happens to mention the symbol. Deterministic,
+    keyword/category-rule based (see app.news.relevance); UNKNOWN means
+    insufficient evidence to classify either way, never a placeholder."""
+
+    PRIMARY = "primary"
+    BACKGROUND = "background"
+    UNKNOWN = "unknown"
+
+
 class CatalystEvent(BaseModel):
     """(Section D) A deterministic grouping of one or more
     `NormalizedNewsArticle`s that report the same underlying catalyst.
@@ -137,6 +149,12 @@ class CatalystEvent(BaseModel):
     latest_update_at: datetime
     title: str
     provenance: dict = {}
+    # (#13/#14) Enrichment added in the post-browser-test correction pass --
+    # sourced from the anchor (earliest) contributing article, never
+    # fabricated when the provider didn't supply one.
+    relevance: CatalystRelevance = CatalystRelevance.UNKNOWN
+    primary_source: Optional[str] = None
+    primary_url: Optional[str] = None
 
 
 class ReactionSession(str, Enum):

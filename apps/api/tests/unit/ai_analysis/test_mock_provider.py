@@ -74,6 +74,30 @@ def test_mock_brief_passes_its_own_grounding_validation_setup_scoped(mode):
     assert result.is_valid, result.violations
 
 
+def test_why_not_surfaces_rejected_alternatives_and_stays_grounded():
+    """(#7 hardening) WHY NOT must show real rejected-candidate detail (not
+    just the bound candidate's own checks) whenever another candidate from
+    the same detection snapshot was rejected, and that detail must still
+    pass grounding (the observed/required numbers are real packet data)."""
+    provider = FakeMarketDataProvider()
+    market_snapshot = build_market_snapshot("SPY", Timeframe.ONE_HOUR, provider, _as_of())
+    setup_snapshot = market_snapshot.setup_snapshot
+    if len(setup_snapshot.rejected_candidates) < 2:
+        pytest.skip("fixture needs at least two rejected candidates to test cross-candidate detail")
+    setup_id = setup_snapshot.rejected_candidates[0].id
+
+    packet = _packet(setup_id=setup_id, with_news=True)
+    assert packet.setup is not None
+    assert packet.setup.rejected_alternatives, "expected at least one other rejected candidate"
+
+    claims = derive_evidence_claims(packet)
+    brief = MockAIAnalysisProvider().synthesize_research_brief(packet, claims, AnalysisMode.WHY_NOT)
+    combined = " ".join(brief.contradictory_evidence)
+    assert "rejected" in combined.lower()
+    result = validate_research_brief(brief, packet, claims)
+    assert result.is_valid, result.violations
+
+
 def test_mock_brief_is_deterministic():
     packet = _packet(with_news=True)
     claims = derive_evidence_claims(packet)

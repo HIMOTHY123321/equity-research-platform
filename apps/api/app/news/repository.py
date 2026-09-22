@@ -220,6 +220,9 @@ class SqlAlchemyNewsRepository(NewsRepository):
                         latest_update_at=event.latest_update_at,
                         title=event.title,
                         provenance=event.provenance,
+                        relevance=event.relevance.value,
+                        primary_source=event.primary_source,
+                        primary_url=event.primary_url,
                     )
                 )
             for article_id in event.contributing_article_ids:
@@ -271,6 +274,9 @@ class SqlAlchemyNewsRepository(NewsRepository):
             latest_update_at=_ensure_utc(row.latest_update_at),
             title=row.title,
             provenance=row.provenance,
+            relevance=row.relevance,
+            primary_source=row.primary_source,
+            primary_url=row.primary_url,
         )
 
     # ---- reactions --------------------------------------------------------

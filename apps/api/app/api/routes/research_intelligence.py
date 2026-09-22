@@ -385,6 +385,12 @@ class AnalogQueryResponse(BaseModel):
     analogs: list[AnalogResult]
     diversity: AnalogDiversityReport
     diverse_analogs: list[AnalogResult]
+    # (#12) `diversity` describes `analogs` (the original ranked list) --
+    # when the UI is showing `diverse_analogs` instead, its warning must be
+    # recomputed against that actually-displayed set, never reused from the
+    # ranked list (a "4 of the top 10" warning is wrong once only 7 rows are
+    # on screen).
+    diverse_analogs_diversity: AnalogDiversityReport
     catalyst_context_applied: bool = False
     # Hardening pass (§T): set only when the corpus itself can't support a
     # genuinely cross-symbol-diverse result (e.g. a single-symbol research
@@ -425,7 +431,13 @@ def compute_analog_query_response(
             raise HTTPException(status_code=404, detail=f"Research run {run_id!r} not found")
         corpus_entries.extend(repository.list_ledger_entries(run_id, limit=10_000))
     if not corpus_entries:
-        return AnalogQueryResponse(analogs=[], diversity=analog_diversity_report([], {}), diverse_analogs=[])
+        empty_diversity = analog_diversity_report([], {})
+        return AnalogQueryResponse(
+            analogs=[],
+            diversity=empty_diversity,
+            diverse_analogs=[],
+            diverse_analogs_diversity=empty_diversity,
+        )
 
     symbols = {body.query_candidate.symbol} | {e.symbol for e in corpus_entries}
     candles_by_symbol: dict[str, list[Candle]] = {}
@@ -466,11 +478,15 @@ def compute_analog_query_response(
         decorated, episode_lookup, config=DEFAULT_RESEARCH_INTELLIGENCE_CONFIG
     )
     diverse = diverse_analogs(decorated, episode_lookup, limit=body.top_n)
+    diverse_diversity = analog_diversity_report(
+        diverse, episode_lookup, config=DEFAULT_RESEARCH_INTELLIGENCE_CONFIG
+    )
 
     return AnalogQueryResponse(
         analogs=decorated,
         diversity=diversity,
         diverse_analogs=diverse,
+        diverse_analogs_diversity=diverse_diversity,
         catalyst_context_applied=body.include_catalyst_context,
         diversity_unavailable_reason=diversity_unavailable_reason(decorated),
     )

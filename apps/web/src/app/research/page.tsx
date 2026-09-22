@@ -75,6 +75,7 @@ export default function ResearchLabPage() {
   const [analogs, setAnalogs] = useState<AnalogResult[] | null>(null);
   const [analogDiversity, setAnalogDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diverseAnalogs, setDiverseAnalogs] = useState<AnalogResult[] | null>(null);
+  const [diverseAnalogsDiversity, setDiverseAnalogsDiversity] = useState<AnalogDiversityReport | null>(null);
   const [diversityUnavailableReason, setDiversityUnavailableReason] = useState<string | null>(null);
   const [analogQuerySetupType, setAnalogQuerySetupType] = useState<string | null>(null);
   const [analogStatus, setAnalogStatus] = useState<AsyncStatus>("idle");
@@ -167,6 +168,7 @@ export default function ResearchLabPage() {
       setAnalogs(res.analogs);
       setAnalogDiversity(res.diversity);
       setDiverseAnalogs(res.diverse_analogs);
+      setDiverseAnalogsDiversity(res.diverse_analogs_diversity);
       setDiversityUnavailableReason(res.diversity_unavailable_reason ?? null);
       setAnalogQuerySetupType(entry.detection.setup_type);
       setAnalogStatus("completed");
@@ -443,6 +445,7 @@ export default function ResearchLabPage() {
                 analogs={analogs}
                 diversity={analogDiversity ?? undefined}
                 diverseAnalogs={diverseAnalogs ?? undefined}
+                diverseAnalogsDiversity={diverseAnalogsDiversity ?? undefined}
                 diversityUnavailableReason={diversityUnavailableReason}
                 querySetupType={analogQuerySetupType ?? undefined}
               />
