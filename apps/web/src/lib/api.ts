@@ -29,6 +29,8 @@ import type {
   SetupDetectionSnapshot,
   SnapshotComparison,
   SupportResistanceSnapshot,
+  SymbolMatch,
+  SymbolSearchResponse,
   Timeframe,
   UniverseReplayResponse,
   WatchlistSymbol,
@@ -85,6 +87,27 @@ export function getCandles(
  * streaming vs. polled -- never inferred from freshness/age alone. */
 export function getLiveStatus(): Promise<LiveStatusResponse> {
   return request<LiveStatusResponse>("/api/live/status");
+}
+
+/** (MARKET UX COMPLETION PASS #3) `watchlistTickers` only breaks ties
+ * among already-matched results (ranking tier 5) -- never widens what
+ * matches. Never falls back to SPY: an empty/no-match query returns an
+ * empty result list, left to the caller to render as "no results". */
+export function searchSymbols(query: string, watchlistTickers: string[] = []): Promise<SymbolSearchResponse> {
+  const params = new URLSearchParams({ q: query });
+  if (watchlistTickers.length > 0) params.set("watchlist", watchlistTickers.join(","));
+  return request<SymbolSearchResponse>(`/api/symbols/search?${params}`);
+}
+
+/** (#4) Resolves to `null` (never throws/falls back) when the ticker isn't
+ * in the symbol directory -- the caller renders "Symbol not found". */
+export async function getSymbol(ticker: string): Promise<SymbolMatch | null> {
+  try {
+    return await request<SymbolMatch>(`/api/symbols/${ticker}`);
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 404) return null;
+    throw err;
+  }
 }
 
 export function getWatchlist(): Promise<WatchlistSymbol[]> {

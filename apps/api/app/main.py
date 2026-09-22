@@ -24,6 +24,7 @@ from app.api.routes import (
     research,
     research_catalysts,
     research_intelligence,
+    symbols,
     watchlist,
 )
 from app.config import get_settings
@@ -133,6 +134,7 @@ app.include_router(research_catalysts.router)
 app.include_router(analysis.router)
 app.include_router(forecasts.router)
 app.include_router(live.router)
+app.include_router(symbols.router)
 
 
 @app.exception_handler(AuthenticationError)

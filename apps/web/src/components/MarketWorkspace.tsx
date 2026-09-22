@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useState } from "react";
 
 import { CandlestickChart, DEFAULT_CHART_DISPLAY_OPTIONS, type ChartDisplayOptions } from "@/components/CandlestickChart";
 import { FeaturePanel } from "@/components/FeaturePanel";
@@ -11,6 +12,7 @@ import { SupportResistancePanel } from "@/components/SupportResistancePanel";
 import { LiveQuoteHeader } from "@/components/LiveQuoteHeader";
 import { RealTimeToggle } from "@/components/RealTimeToggle";
 import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
+import { SymbolSearch } from "@/components/SymbolSearch";
 import { TimeframeSelector } from "@/components/TimeframeSelector";
 import { Watchlist } from "@/components/Watchlist";
 import { WhatsMovingPanel } from "@/components/WhatsMovingPanel";
@@ -22,6 +24,7 @@ import {
   useStructure,
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
+import { useLiveFollow } from "@/hooks/useLiveFollow";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
 import { DEFAULT_RANGE, limitForRange, resolveRangeCompatibility, type ChartRange } from "@/lib/chartRanges";
@@ -35,12 +38,40 @@ import type { Timeframe } from "@/lib/types";
  * once even though both a panel AND the chart use them.
  */
 export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
-  const [symbol, setSymbol] = useState(defaultSymbol);
+  return (
+    <Suspense fallback={null}>
+      <MarketWorkspaceInner defaultSymbol={defaultSymbol} />
+    </Suspense>
+  );
+}
+
+function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // (#5/#9) Derived from the URL (server-set on first load via `defaultSymbol`,
+  // client-navigated thereafter) so a symbol change here is a real history
+  // entry -- back/forward and cross-page persistence both just work, no
+  // local state to fall out of sync with it.
+  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || defaultSymbol;
+  const setSymbol = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("symbol", next);
+      // push (not replace): each symbol change is a distinct back-stack
+      // entry -- "SPY -> NVDA -> AAPL -> Back = NVDA -> Back = SPY".
+      router.push(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
   const [realTimeMode, setRealTimeMode] = useState(false);
   const streamingActive = useStreamingActive();
+  // (#6) Architecture for live-follow: real end-to-end behavior can't be
+  // verified without a genuine Massive entitlement (not active here), so
+  // this is wired defensively and covered by mocked hook tests instead.
+  const liveFollow = useLiveFollow(streamingActive && realTimeMode);
 
   function toggleDisplay(key: keyof ChartDisplayOptions) {
     setDisplay((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -69,6 +100,9 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr]">
         <aside className="rounded-md border border-border bg-surface p-3">
+          {/* (#2) The primary symbol selector -- searchable by ticker or
+              company name, never a plain "type an exact ticker" box. */}
+          <SymbolSearch value={symbol} onSelect={setSymbol} placeholder="Search symbol…" className="mb-3" />
           <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">WATCHLIST</h2>
           <Watchlist selected={symbol} onSelect={setSymbol} />
         </aside>
@@ -122,7 +156,24 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
               {compat.note}
             </div>
           )}
-          <div className="h-[480px] p-2">
+          <div
+            className="relative h-[480px] p-2"
+            // (#6) A manual pan/zoom while REAL TIME is active pauses
+            // auto-follow -- new events may keep arriving in the
+            // background without snapping the chart away from what the
+            // user is inspecting. No-op when REAL TIME isn't active.
+            onWheel={liveFollow.pause}
+            onPointerDown={liveFollow.pause}
+          >
+            {liveFollow.showReturnToLive && (
+              <button
+                type="button"
+                onClick={liveFollow.resume}
+                className="absolute right-4 top-4 z-10 rounded border border-accent bg-surface px-2.5 py-1 font-mono text-[10px] font-semibold text-accent shadow"
+              >
+                RETURN TO LIVE
+              </button>
+            )}
             {chartState === "loading" && (
               <div className="flex h-full items-center justify-center text-xs text-muted">
                 Loading chart…
@@ -163,7 +214,12 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                     ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates]
                     : undefined
                 }
-                liveCandle={liveCandles[effectiveTimeframe] ?? null}
+                // (#6) Paused (autoFollow=false) suppresses the live overlay
+                // so the forming candle stops visually updating while the
+                // user is inspecting an older part of the chart -- events
+                // keep arriving in the background (useLiveSymbol itself
+                // never stops), only the visual snap is withheld.
+                liveCandle={liveFollow.autoFollow ? (liveCandles[effectiveTimeframe] ?? null) : null}
                 display={display}
                 symbol={symbol}
                 timeframe={effectiveTimeframe}

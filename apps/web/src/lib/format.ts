@@ -433,12 +433,22 @@ export function freshnessDotClass(state: string): string {
 /** Never a bare current-time label -- always the elapsed time since the
  * value's own source_timestamp (#F/#U), so a stale value can never look
  * fresher than it actually is. */
+/** (MARKET UX COMPLETION PASS #7) Precise, monotonically-readable elapsed
+ * time -- "0.2s" / "1s" / "14s" / "1m 03s" / "12m 47s" / "2h 03m 12s".
+ * Sub-second precision below 1s (so a genuinely fresh event doesn't jump
+ * straight to "1s"), whole seconds above that, zero-padded once minutes
+ * appear so the display doesn't visually jitter in width every tick. */
 export function formatAgeSeconds(age: number | null): string {
   if (age === null) return "—";
-  if (age < 1) return "<1s ago";
-  if (age < 60) return `${age.toFixed(1)}s ago`;
-  if (age < 3600) return `${Math.round(age / 60)}m ago`;
-  return `${Math.round(age / 3600)}h ago`;
+  if (age < 1) return `${age.toFixed(1)}s`;
+  const totalSeconds = Math.round(age);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  if (hours > 0) return `${hours}h ${pad(minutes)}m ${pad(seconds)}s`;
+  if (minutes > 0) return `${minutes}m ${pad(seconds)}s`;
+  return `${seconds}s`;
 }
 
 export function gateDecisionColorClass(decision: string): string {

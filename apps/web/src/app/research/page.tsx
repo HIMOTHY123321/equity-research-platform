@@ -8,6 +8,7 @@ import { HistoricalAnalogsPanel } from "@/components/research/HistoricalAnalogsP
 import { ResearchResultsPanel } from "@/components/research/ResearchResultsPanel";
 import { ResearchSnapshotsPanel } from "@/components/research/ResearchSnapshotsPanel";
 import { SetupTypeResearchCard } from "@/components/research/SetupTypeResearchCard";
+import { SymbolSearch } from "@/components/SymbolSearch";
 import { TopNav } from "@/components/TopNav";
 import {
   ApiError,
@@ -60,7 +61,8 @@ function ResearchLabPageInner() {
     (next: string) => {
       const params = new URLSearchParams(searchParams.toString());
       params.set("symbol", next);
-      router.replace(`?${params.toString()}`, { scroll: false });
+      // push (not replace): each symbol change is its own back-stack entry.
+      router.push(`?${params.toString()}`, { scroll: false });
     },
     [router, searchParams],
   );
@@ -225,11 +227,7 @@ function ResearchLabPageInner() {
           <form onSubmit={handleRun} className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-xs text-muted">
               Symbol
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                className="w-24 rounded border border-border bg-surface-raised px-2 py-1 font-mono text-sm text-foreground"
-              />
+              <SymbolSearch value={symbol} onSelect={setSymbol} className="w-32" />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted">
               Timeframe

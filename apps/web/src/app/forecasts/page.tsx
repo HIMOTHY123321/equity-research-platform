@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useState } from "react";
 
 import { CandlestickChart } from "@/components/CandlestickChart";
+import { SymbolSearch } from "@/components/SymbolSearch";
 import { TopNav } from "@/components/TopNav";
 import {
   evidenceQualityColorClass,
@@ -97,7 +98,8 @@ function ForecastLabPageInner() {
     (next: string) => {
       const params = new URLSearchParams(searchParams.toString());
       params.set("symbol", next);
-      router.replace(`?${params.toString()}`, { scroll: false });
+      // push (not replace): each symbol change is its own back-stack entry.
+      router.push(`?${params.toString()}`, { scroll: false });
     },
     [router, searchParams],
   );
@@ -207,11 +209,7 @@ function ForecastLabPageInner() {
           <form onSubmit={handleStartBenchmark} className="flex flex-wrap items-end gap-3">
             <label className="flex flex-col gap-1 text-xs text-muted">
               Symbol
-              <input
-                value={symbol}
-                onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                className="w-24 rounded border border-border bg-surface-raised px-2 py-1 font-mono text-sm text-foreground"
-              />
+              <SymbolSearch value={symbol} onSelect={setSymbol} className="w-32" />
             </label>
             <label className="flex flex-col gap-1 text-xs text-muted">
               Timeframe

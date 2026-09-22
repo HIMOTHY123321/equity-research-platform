@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState } from "react";
 
+import { SymbolSearch } from "@/components/SymbolSearch";
 import { ApiError, addWatchlistSymbol, getWatchlist, removeWatchlistSymbol } from "@/lib/api";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { formatSignedPercent, freshnessDotClass } from "@/lib/format";
@@ -19,7 +20,6 @@ export function Watchlist({
   const [symbols, setSymbols] = useState<WatchlistSymbol[]>([]);
   const [state, setState] = useState<LoadState>("loading");
   const [actionError, setActionError] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
   async function load() {
@@ -41,14 +41,11 @@ export function Watchlist({
     load();
   }, []);
 
-  async function handleAdd(event: FormEvent) {
-    event.preventDefault();
-    if (!draft.trim()) return;
+  async function handleAdd(ticker: string) {
     setSubmitting(true);
     setActionError(null);
     try {
-      await addWatchlistSymbol(draft.trim());
-      setDraft("");
+      await addWatchlistSymbol(ticker);
       await load();
     } catch (err) {
       setActionError(err instanceof ApiError ? err.message : "Failed to add symbol");
@@ -69,22 +66,14 @@ export function Watchlist({
 
   return (
     <div className="flex flex-col gap-3">
-      <form onSubmit={handleAdd} className="flex gap-2">
-        <input
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          placeholder="Add ticker"
-          maxLength={7}
-          className="w-full rounded border border-border bg-surface-raised px-2 py-1 text-xs uppercase text-foreground placeholder:text-muted placeholder:normal-case focus:outline-none focus:ring-1 focus:ring-accent"
-        />
-        <button
-          type="submit"
-          disabled={submitting}
-          className="rounded border border-border px-2 py-1 text-xs text-muted hover:text-foreground disabled:opacity-50"
-        >
-          Add
-        </button>
-      </form>
+      {/* (#2) Watchlist-add now uses the shared SymbolSearch -- selecting a
+          result adds it immediately, never a silent fallback. */}
+      <SymbolSearch
+        value=""
+        onSelect={handleAdd}
+        watchlistTickers={symbols.map((s) => s.ticker)}
+        placeholder={submitting ? "Adding…" : "Add ticker"}
+      />
 
       {actionError && <p className="text-[11px] text-negative">{actionError}</p>}
 

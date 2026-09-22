@@ -1616,3 +1616,19 @@ export type LiveServerFrame =
   | { type: "catalyst_event"; symbol: string; new_article_count: number; detected_at: string }
   | { type: "heartbeat" }
   | { type: "error"; detail: string };
+
+// ---- SymbolSearch (MARKET UX COMPLETION PASS #3) -----------------------
+
+export type AssetType = "equity" | "etf";
+
+export interface SymbolMatch {
+  ticker: string;
+  name: string;
+  asset_type: AssetType;
+  match_tier: number;
+}
+
+export interface SymbolSearchResponse {
+  query: string;
+  results: SymbolMatch[];
+}

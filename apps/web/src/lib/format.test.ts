@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { formatFreshnessLabel } from "./format";
+import { formatAgeSeconds, formatFreshnessLabel } from "./format";
 
 describe("formatFreshnessLabel (§5: STREAMING LIVE vs LATEST AVAILABLE)", () => {
   it("never claims STREAMING LIVE for fresh data from a non-streaming (polled) provider", () => {
@@ -21,5 +21,29 @@ describe("formatFreshnessLabel (§5: STREAMING LIVE vs LATEST AVAILABLE)", () =>
     expect(formatFreshnessLabel("stale", true)).toBe("STALE");
     expect(formatFreshnessLabel("disconnected", true)).toBe("DISCONNECTED");
     expect(formatFreshnessLabel("market_closed", true)).toBe("MARKET CLOSED");
+  });
+});
+
+describe("formatAgeSeconds (#7: precise, non-jittery elapsed-time display)", () => {
+  it("shows sub-second precision below 1s", () => {
+    expect(formatAgeSeconds(0.2)).toBe("0.2s");
+  });
+
+  it("shows whole seconds without decimals once >= 1s", () => {
+    expect(formatAgeSeconds(1)).toBe("1s");
+    expect(formatAgeSeconds(14)).toBe("14s");
+  });
+
+  it("shows minutes with zero-padded seconds", () => {
+    expect(formatAgeSeconds(63)).toBe("1m 03s");
+    expect(formatAgeSeconds(767)).toBe("12m 47s");
+  });
+
+  it("shows hours with zero-padded minutes and seconds", () => {
+    expect(formatAgeSeconds(7392)).toBe("2h 03m 12s");
+  });
+
+  it("returns an em dash placeholder for null (never a fake age)", () => {
+    expect(formatAgeSeconds(null)).toBe("—");
   });
 });
