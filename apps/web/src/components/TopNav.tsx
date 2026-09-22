@@ -1,18 +1,24 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Overview" },
-  { href: "/research", label: "Research Lab" },
-  { href: "/forecasts", label: "Forecast Lab" },
-  { href: "/reports", label: "Reports" },
-  { href: "/watchlist", label: "Watchlist" },
+  { href: "/", label: "Overview", symbolAware: true },
+  { href: "/research", label: "Research Lab", symbolAware: true },
+  { href: "/forecasts", label: "Forecast Lab", symbolAware: true },
+  { href: "/reports", label: "Reports", symbolAware: false },
+  { href: "/watchlist", label: "Watchlist", symbolAware: false },
 ];
 
-export function TopNav() {
+function TopNavInner() {
   const pathname = usePathname();
+  // (#9) The current page's `?symbol=` (if any) is carried onto every
+  // other symbol-aware page's nav link -- otherwise clicking "Forecast
+  // Lab" from Overview?symbol=NVDA would silently drop back to the
+  // hardcoded default, defeating cross-page persistence entirely.
+  const symbol = useSearchParams().get("symbol");
 
   return (
     <header className="border-b border-border bg-surface">
@@ -26,10 +32,11 @@ export function TopNav() {
         <nav className="flex gap-5 text-xs text-muted">
           {NAV_ITEMS.map((item) => {
             const active = item.href === "/" ? pathname === "/" : pathname?.startsWith(item.href);
+            const href = item.symbolAware && symbol ? `${item.href}?symbol=${symbol}` : item.href;
             return (
               <Link
                 key={item.href}
-                href={item.href}
+                href={href}
                 className={active ? "text-foreground" : "hover:text-foreground"}
               >
                 {item.label}
@@ -39,5 +46,13 @@ export function TopNav() {
         </nav>
       </div>
     </header>
+  );
+}
+
+export function TopNav() {
+  return (
+    <Suspense fallback={null}>
+      <TopNavInner />
+    </Suspense>
   );
 }

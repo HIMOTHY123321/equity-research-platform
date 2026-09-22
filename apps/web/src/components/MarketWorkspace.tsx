@@ -9,6 +9,7 @@ import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
 import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
 import { LiveQuoteHeader } from "@/components/LiveQuoteHeader";
+import { RealTimeToggle } from "@/components/RealTimeToggle";
 import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
 import { TimeframeSelector } from "@/components/TimeframeSelector";
 import { Watchlist } from "@/components/Watchlist";
@@ -22,7 +23,8 @@ import {
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
-import { DEFAULT_RANGE, limitForRange, type ChartRange } from "@/lib/chartRanges";
+import { useStreamingActive } from "@/hooks/useStreamingActive";
+import { DEFAULT_RANGE, limitForRange, resolveRangeCompatibility, type ChartRange } from "@/lib/chartRanges";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -37,18 +39,27 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
+  const [realTimeMode, setRealTimeMode] = useState(false);
+  const streamingActive = useStreamingActive();
 
   function toggleDisplay(key: keyof ChartDisplayOptions) {
     setDisplay((prev) => ({ ...prev, [key]: !prev[key] }));
   }
 
-  const candlesQuery = useCandles(symbol, timeframe, limitForRange(range, timeframe));
-  const featuresQuery = useFeatures(symbol, timeframe);
-  const structureQuery = useStructure(symbol, timeframe);
-  const levelsQuery = useLevels(symbol, timeframe);
-  const setupsQuery = useSetups(symbol, timeframe);
+  // (#5/#6) MAX+1m and similar impossible (range, interval) combinations
+  // never silently return a tiny recent window -- the actual resolution
+  // used everywhere below is the resolved one, and `compat.note` discloses
+  // any substitution to the user rather than hiding it.
+  const compat = resolveRangeCompatibility(range, timeframe);
+  const effectiveTimeframe = compat.effectiveTimeframe;
+
+  const candlesQuery = useCandles(symbol, effectiveTimeframe, limitForRange(range, effectiveTimeframe));
+  const featuresQuery = useFeatures(symbol, effectiveTimeframe);
+  const structureQuery = useStructure(symbol, effectiveTimeframe);
+  const levelsQuery = useLevels(symbol, effectiveTimeframe);
+  const setupsQuery = useSetups(symbol, effectiveTimeframe);
   const catalystsQuery = useSymbolCatalysts(symbol);
-  const { candles: liveCandles } = useLiveSymbol(symbol, [timeframe]);
+  const { candles: liveCandles } = useLiveSymbol(symbol, [effectiveTimeframe]);
 
   const candles = candlesQuery.data?.candles ?? [];
   const chartState =
@@ -66,7 +77,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
             <div className="flex items-center gap-3">
               <h2 className="font-mono text-sm font-semibold text-foreground">{symbol}</h2>
-              <LiveQuoteHeader symbol={symbol} timeframe={timeframe} />
+              <LiveQuoteHeader symbol={symbol} timeframe={effectiveTimeframe} realTimeMode={realTimeMode} />
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-1.5 text-[10px]">
@@ -92,10 +103,25 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                   </button>
                 ))}
               </div>
+              <RealTimeToggle
+                active={realTimeMode}
+                streamingActive={streamingActive}
+                onToggle={() => setRealTimeMode((v) => !v)}
+              />
               <RangeSelector value={range} onChange={setRange} />
-              <TimeframeSelector value={timeframe} onChange={setTimeframe} />
+              {/* (#5/#6) Always reflects the ACTUAL resolution in use, not
+                  necessarily what was last clicked -- clicking still sets
+                  the desired interval via onChange, but an incompatible
+                  combination shows the resolved fallback here instead of
+                  a selector that lies about what's on screen. */}
+              <TimeframeSelector value={effectiveTimeframe} onChange={setTimeframe} />
             </div>
           </div>
+          {compat.note && (
+            <div className="border-b border-border bg-amber-500/5 px-4 py-1.5 text-[11px] text-amber-600 dark:text-amber-400">
+              {compat.note}
+            </div>
+          )}
           <div className="h-[480px] p-2">
             {chartState === "loading" && (
               <div className="flex h-full items-center justify-center text-xs text-muted">
@@ -109,7 +135,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
             )}
             {chartState === "empty" && (
               <div className="flex h-full items-center justify-center text-xs text-muted">
-                No candles returned for {symbol} at {timeframe}.
+                No candles returned for {symbol} at {effectiveTimeframe}.
               </div>
             )}
             {chartState === "ready" && (
@@ -137,10 +163,10 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
                     ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates]
                     : undefined
                 }
-                liveCandle={liveCandles[timeframe] ?? null}
+                liveCandle={liveCandles[effectiveTimeframe] ?? null}
                 display={display}
                 symbol={symbol}
-                timeframe={timeframe}
+                timeframe={effectiveTimeframe}
               />
             )}
           </div>
@@ -166,7 +192,7 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
         <SymbolCatalystTimeline
           query={catalystsQuery}
           symbol={symbol}
-          timeframe={timeframe}
+          timeframe={effectiveTimeframe}
           setups={setupsQuery.data ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates] : []}
         />
       </section>

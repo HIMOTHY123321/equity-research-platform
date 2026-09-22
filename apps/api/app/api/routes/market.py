@@ -39,6 +39,11 @@ CANDLE_LIMIT_BY_TIMEFRAME: dict[Timeframe, int] = {
     Timeframe.ONE_HOUR: 2000,
     Timeframe.FIFTEEN_MIN: 4000,
     Timeframe.FIVE_MIN: 12000,
+    # 7 real calendar days at 1m resolution including extended hours (~600
+    # min/day including pre/post-market) -- generous enough to always get
+    # everything Yahoo's real 7-day 1m window will give, never a request
+    # that silently truncates before that window's own limit does.
+    Timeframe.ONE_MIN: 5000,
 }
 
 # S/R evidence always draws from these timeframes' confirmed swings,
@@ -47,9 +52,10 @@ LEVEL_SOURCE_TIMEFRAMES = (Timeframe.ONE_DAY, Timeframe.FOUR_HOUR)
 
 router = APIRouter(prefix="/api/market", tags=["market"])
 
-# Only timeframes Phase 2 actually supports fetching/constructing. 1m and 1w
-# are defined in the internal Candle contract but not wired up yet.
+# Only timeframes actually supported for fetching/constructing. 1w is
+# defined in the internal Candle contract but not wired up yet.
 ALLOWED_CANDLE_TIMEFRAMES = {
+    Timeframe.ONE_MIN,
     Timeframe.FIVE_MIN,
     Timeframe.FIFTEEN_MIN,
     Timeframe.ONE_HOUR,
@@ -83,14 +89,15 @@ def _validated_timeframe(timeframe: str) -> Timeframe:
 def get_candles(
     symbol: str,
     timeframe: str = Query("1d"),
-    # Hardening pass (§6/§8): raised from 1000 -> 5000 so a MAX-range daily
-    # chart can reach a full ~10y history (the provider's own real cap --
-    # see YFinanceMarketDataProvider/_YFINANCE_MAX_PERIOD -- already limits
-    # this internally; this is a bound on the request, not a promise every
-    # provider/symbol can fill it). Still explicitly bounded, never
-    # "however many bars exist" -- see docs/decisions on avoiding
+    # Hardening pass (§6/§8), raised again in the MARKET EXPERIENCE
+    # COMPLETION PASS (#6): a MAX-range daily chart must reach a symbol's
+    # true earliest listing history (yfinance's period is now "max", not a
+    # fixed "10y" -- see YFinanceMarketDataProvider/_YFINANCE_MAX_PERIOD),
+    # and a long-lived symbol like SPY (trading since 1993) has ~8500+ daily
+    # bars. 15000 gives headroom for that while staying explicitly bounded,
+    # never "however many bars exist" -- see docs/decisions on avoiding
     # unbounded history payloads.
-    limit: int = Query(200, ge=1, le=5000),
+    limit: int = Query(200, ge=1, le=15000),
     provider: MarketDataProvider = Depends(get_market_data_provider),
 ) -> CandlesResponse:
     validated_symbol = _validated_symbol(symbol)

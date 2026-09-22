@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useState } from "react";
 
 import { CatalystResearchPanel } from "@/components/research/CatalystResearchPanel";
 import { HistoricalAnalogsPanel } from "@/components/research/HistoricalAnalogsPanel";
@@ -39,8 +40,30 @@ function isoDaysAgo(days: number): string {
 }
 
 export default function ResearchLabPage() {
+  return (
+    <Suspense fallback={null}>
+      <ResearchLabPageInner />
+    </Suspense>
+  );
+}
+
+function ResearchLabPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   // ---- Single-symbol replay (existing, unchanged) --------------------------
-  const [symbol, setSymbol] = useState("SPY");
+  // (#9) Same URL-query-state persistence convention as Forecast Lab/
+  // Overview -- derived directly from the URL, no local state to fall out
+  // of sync with it.
+  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || "SPY";
+
+  const setSymbol = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("symbol", next);
+      router.replace(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [start, setStart] = useState(isoDaysAgo(30));
   const [end, setEnd] = useState(isoDaysAgo(2));

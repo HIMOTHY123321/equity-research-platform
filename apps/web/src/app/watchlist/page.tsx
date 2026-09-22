@@ -7,6 +7,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { TopNav } from "@/components/TopNav";
 import { useLiveConnectionState, useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
+import { useTickingAgeSeconds } from "@/hooks/useTickingAge";
 import { ApiError, addWatchlistSymbol, getWatchlist, removeWatchlistSymbol } from "@/lib/api";
 import {
   formatAgeSeconds,
@@ -167,6 +168,7 @@ function WatchlistPageRow({
   const router = useRouter();
   const { quote } = useLiveSymbol(ticker, ["1h"], "watchlist");
   const freshness = quote?.freshness;
+  const tickingAge = useTickingAgeSeconds(freshness?.source_timestamp ?? null);
   const href = `/?symbol=${ticker}`;
 
   return (
@@ -207,7 +209,7 @@ function WatchlistPageRow({
             <span className={freshnessColorClass(freshness.freshness_state)}>
               {formatFreshnessLabel(freshness.freshness_state, streamingActive)}
             </span>
-            <span className="text-muted">{formatAgeSeconds(freshness.age_seconds)}</span>
+            <span className="text-muted">{formatAgeSeconds(tickingAge)}</span>
           </span>
         ) : (
           <span className="text-muted">Waiting…</span>

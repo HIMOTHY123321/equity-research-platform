@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useCallback, useState } from "react";
 
 import { CandlestickChart } from "@/components/CandlestickChart";
 import { TopNav } from "@/components/TopNav";
@@ -75,7 +76,31 @@ function BreakdownTable({ title, rows }: { title: string; rows: ForecastPerforma
 }
 
 export default function ForecastLabPage() {
-  const [symbol, setSymbol] = useState("SPY");
+  return (
+    <Suspense fallback={null}>
+      <ForecastLabPageInner />
+    </Suspense>
+  );
+}
+
+function ForecastLabPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  // (#9) A symbol selected on Overview (`/?symbol=NVDA`) must persist here
+  // rather than always resetting to a hardcoded default -- derived directly
+  // from the URL (the single source of truth) so browser back/forward and
+  // cross-page navigation both just work, no local state to fall out of
+  // sync with it.
+  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || "SPY";
+
+  const setSymbol = useCallback(
+    (next: string) => {
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("symbol", next);
+      router.replace(`?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [forecastCategory, setForecastCategory] = useState<ForecastCategoryKind>("structure");
   const [horizonBars, setHorizonBars] = useState(20);

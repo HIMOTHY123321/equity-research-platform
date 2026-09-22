@@ -65,6 +65,7 @@ _MAX_CANDLE_FETCH = 50_000
 # the true bar count for a period (real markets are closed nights/weekends/
 # holidays), so this can only ever over-fetch, never under-fetch.
 _BAR_SECONDS: dict[Timeframe, int] = {
+    Timeframe.ONE_MIN: 60,
     Timeframe.FIVE_MIN: 300,
     Timeframe.FIFTEEN_MIN: 900,
     Timeframe.ONE_HOUR: 3600,

@@ -4,6 +4,7 @@ Every market data source (Alpaca today, anything else later) must be adapted int
 this shape before it touches the feature engine or anything above it.
 """
 
+import math
 from datetime import date, datetime
 from enum import Enum
 
@@ -50,6 +51,21 @@ class Candle(BaseModel):
             raise ValueError("timestamp must be timezone-aware")
         return v
 
+    @field_validator("open", "high", "low", "close")
+    @classmethod
+    def price_is_finite(cls, v: float) -> float:
+        # (MARKET EXPERIENCE COMPLETION PASS #0) NaN/Infinity is a real,
+        # observed yfinance behavior on halted/missing-data days (pandas
+        # represents a gap as NaN) -- and `nan < x` / `nan > x` are BOTH
+        # False in Python, so `ohlc_is_internally_consistent` below silently
+        # accepts a NaN candle rather than rejecting it. Reject at this
+        # boundary instead, through the same RejectedBar/logging path every
+        # other malformed bar already goes through -- never let a non-finite
+        # price reach ATR/features/analog outcomes downstream.
+        if not math.isfinite(v):
+            raise ValueError("price fields must be finite (no NaN/Infinity)")
+        return v
+
     @model_validator(mode="after")
     def ohlc_is_internally_consistent(self) -> "Candle":
         if self.high < max(self.open, self.close, self.low):
@@ -61,6 +77,8 @@ class Candle(BaseModel):
     @field_validator("volume")
     @classmethod
     def volume_non_negative(cls, v: float) -> float:
+        if not math.isfinite(v):
+            raise ValueError("volume must be finite (no NaN/Infinity)")
         if v < 0:
             raise ValueError("volume cannot be negative")
         return v

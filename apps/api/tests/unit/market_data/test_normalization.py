@@ -140,6 +140,34 @@ def test_normalize_yfinance_bars_collects_malformed_rows_without_dropping_valid_
     assert all(r.reason for r in result.rejected)
 
 
+def test_normalize_yfinance_rejects_nan_ohlc():
+    """(MARKET EXPERIENCE COMPLETION PASS #0) Root cause of the EvidencePacket
+    500: a NaN price from a halted/missing-data yfinance row previously
+    passed `ohlc_is_internally_consistent` silently, because `nan < x` and
+    `nan > x` are BOTH False in Python -- the consistency check never fired.
+    A NaN candle must be rejected at this boundary, the same as any other
+    malformed bar, never accepted as "valid"."""
+    import math
+
+    good = {"Open": 100, "High": 101, "Low": 99, "Close": 100.5, "Volume": 10}
+    nan_close = {"Open": 100, "High": 101, "Low": 99, "Close": float("nan"), "Volume": 10}
+    inf_high = {"Open": 100, "High": float("inf"), "Low": 99, "Close": 100.5, "Volume": 10}
+    nan_volume = {"Open": 100, "High": 101, "Low": 99, "Close": 100.5, "Volume": float("nan")}
+
+    rows = [
+        (utc(2026, 8, 17, 14, 30), good),
+        (utc(2026, 8, 17, 15, 30), nan_close),
+        (utc(2026, 8, 17, 16, 30), inf_high),
+        (utc(2026, 8, 17, 17, 30), nan_volume),
+    ]
+    result = normalize_yfinance_bars(rows, "AAPL", Timeframe.ONE_HOUR)
+
+    assert len(result.candles) == 1
+    assert math.isfinite(result.candles[0].close)
+    assert len(result.rejected) == 3
+    assert all(r.reason for r in result.rejected)
+
+
 def test_normalize_yfinance_zero_volume_is_valid_not_rejected():
     row = {"Open": 100, "High": 101, "Low": 99, "Close": 100.5, "Volume": 0}
     # 10:30 UTC = 6:30 ET (EDT) -- within the 04:00-09:30 pre-market window.

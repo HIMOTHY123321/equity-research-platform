@@ -45,16 +45,27 @@ logger = logging.getLogger(__name__)
 # queried — not a choice we made. Empirically verified against real SPY
 # data; see the ADR for the exact figures observed.
 _YFINANCE_INTERVAL = {
+    Timeframe.ONE_MIN: "1m",
     Timeframe.FIVE_MIN: "5m",
     Timeframe.FIFTEEN_MIN: "15m",
     Timeframe.ONE_HOUR: "1h",
     Timeframe.ONE_DAY: "1d",
 }
 _YFINANCE_MAX_PERIOD = {
+    # Yahoo's real, documented, empirically-verified limit for 1m bars is 7
+    # calendar days -- far shorter than 5m/15m's 60 days. This is a genuine
+    # provider limitation, not a choice; requesting more silently returns
+    # nothing extra from Yahoo's own API, so we never claim a longer window.
+    Timeframe.ONE_MIN: "7d",
     Timeframe.FIVE_MIN: "60d",
     Timeframe.FIFTEEN_MIN: "60d",
     Timeframe.ONE_HOUR: "730d",
-    Timeframe.ONE_DAY: "10y",
+    # (MARKET EXPERIENCE COMPLETION PASS #6) "max" is a real yfinance period
+    # value -- Yahoo returns every daily bar it has back to a symbol's own
+    # listing date, never more. A fixed "10y" previously capped MAX+1d well
+    # short of that (e.g. SPY has traded since 1993), silently pretending a
+    # shorter history was the true limit when it was only our own request.
+    Timeframe.ONE_DAY: "max",
 }
 
 DEFAULT_MAX_RETRIES = 2

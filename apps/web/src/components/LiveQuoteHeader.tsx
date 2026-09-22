@@ -3,6 +3,7 @@
 import { formatAgeSeconds, formatExchangeTimestamp, formatFreshnessLabel, freshnessColorClass, freshnessDotClass } from "@/lib/format";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
+import { useTickingAgeSeconds } from "@/hooks/useTickingAge";
 import type { Timeframe } from "@/lib/types";
 
 /**
@@ -12,9 +13,26 @@ import type { Timeframe } from "@/lib/types";
  * which shares its single underlying WebSocket subscription with every
  * other live consumer on the page.
  */
-export function LiveQuoteHeader({ symbol, timeframe }: { symbol: string; timeframe: Timeframe }) {
+export function LiveQuoteHeader({
+  symbol,
+  timeframe,
+  realTimeMode = false,
+}: {
+  symbol: string;
+  timeframe: Timeframe;
+  /** (#2) Only ever rendered as active when the caller has ALSO verified
+   * `streamingActive` -- this component still re-checks it itself below,
+   * since a caller must never be able to force the REAL TIME label onto a
+   * polling provider. */
+  realTimeMode?: boolean;
+}) {
   const { quote, connectionState } = useLiveSymbol(symbol, [timeframe]);
   const streamingActive = useStreamingActive();
+  const showRealTime = realTimeMode && streamingActive;
+  // (#3) Ticks every second from the fixed source timestamp -- never from
+  // the backend's own snapshot `age_seconds`, which only changes between
+  // poll/WS messages and would otherwise look frozen for long stretches.
+  const tickingAge = useTickingAgeSeconds(quote?.freshness.source_timestamp ?? null);
 
   if (!quote) {
     return (
@@ -34,6 +52,12 @@ export function LiveQuoteHeader({ symbol, timeframe }: { symbol: string; timefra
 
   return (
     <div className="flex flex-col gap-1 font-mono text-[11px]">
+      {showRealTime && (
+        <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wide text-positive">
+          <span className="h-1.5 w-1.5 rounded-full bg-positive" />
+          Real Time
+        </span>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <span className="text-sm font-semibold text-foreground">{quote.price.toFixed(2)}</span>
         {quote.percent_change !== null && (
@@ -49,7 +73,7 @@ export function LiveQuoteHeader({ symbol, timeframe }: { symbol: string; timefra
           </span>
         </span>
         <span className="text-muted" title={freshness.source_timestamp ? formatExchangeTimestamp(freshness.source_timestamp) : undefined}>
-          {formatAgeSeconds(freshness.age_seconds)}
+          {formatAgeSeconds(tickingAge)}
         </span>
         <span className="text-muted">
           via {freshness.provider}
