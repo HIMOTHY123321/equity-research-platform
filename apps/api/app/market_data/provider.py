@@ -6,6 +6,8 @@ so the data source can be swapped without touching call sites.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from datetime import datetime
+from typing import Optional
 
 from app.market_data.capabilities import ProviderCapabilities
 from app.schemas.market_data import Candle, PreviousClose, Quote, Timeframe
@@ -18,8 +20,16 @@ class MarketDataProvider(ABC):
         symbol: str,
         timeframe: Timeframe,
         limit: int = 200,
+        before: Optional[datetime] = None,
     ) -> list[Candle]:
-        """Return normalized candles, oldest first, deduplicated, no fabricated bars."""
+        """Return normalized candles, oldest first, deduplicated, no
+        fabricated bars. `before`, when given (MARKET UX COMPLETION PASS
+        #1: lazy pan-left pagination), returns the `limit` candles most
+        immediately preceding that instant (strictly `timestamp < before`,
+        the boundary candle is never duplicated) instead of the most
+        recent `limit` candles -- the caller (app.api.routes.market) uses
+        whether fewer than `limit` came back to decide real provider
+        history exhaustion, never a fabricated "no more data" guess."""
 
     @abstractmethod
     def get_latest_quote(self, symbol: str) -> Quote:

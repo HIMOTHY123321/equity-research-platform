@@ -26,7 +26,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Optional
 
 import yfinance as yf
 from yfinance.exceptions import YFException, YFRateLimitError
@@ -89,14 +89,24 @@ class YFinanceMarketDataProvider(MarketDataProvider):
     def capabilities(self) -> ProviderCapabilities:
         return YFINANCE_CAPABILITIES
 
-    def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int = 200,
+        before: Optional[datetime] = None,
+    ) -> list[Candle]:
         if timeframe == Timeframe.FOUR_HOUR:
             # ~2 regular-session 4H bars per trading day; pad generously so
             # we have enough 1H history to produce `limit` complete 4H bars.
-            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, limit * 4 + 50)
+            # For a `before` page, the same padding is added on the FAR side
+            # of the cursor (older direction) so the aggregation still has
+            # enough raw 1H bars to build `limit` complete 4H bars ending
+            # right at the cursor, not just near "now".
+            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, limit * 4 + 50, before=before)
             return aggregate_hourly_to_4h(hourly)[-limit:]
 
-        return self._fetch_bars(symbol, timeframe, limit)
+        return self._fetch_bars(symbol, timeframe, limit, before=before)
 
     def get_latest_quote(self, symbol: str) -> Quote:
         """Hardening pass: `timestamp` used to be `self._now()` -- the
@@ -138,7 +148,9 @@ class YFinanceMarketDataProvider(MarketDataProvider):
 
     # ---- internals ----------------------------------------------------------
 
-    def _fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+    def _fetch_bars(
+        self, symbol: str, timeframe: Timeframe, limit: int, before: Optional[datetime] = None
+    ) -> list[Candle]:
         interval = _YFINANCE_INTERVAL.get(timeframe)
         if interval is None:
             raise ValueError(f"yfinance provider does not support fetching {timeframe.value} bars directly")
@@ -160,7 +172,18 @@ class YFinanceMarketDataProvider(MarketDataProvider):
                 symbol,
             )
 
-        return result.candles[-limit:]
+        candles = result.candles
+        if before is not None:
+            # (#1 pagination) Strictly `< before` -- the boundary candle
+            # already shown to the caller is never duplicated in the next
+            # page. This still fetches the SAME real provider window
+            # `_YFINANCE_MAX_PERIOD` already caps (never more than Yahoo
+            # actually has), so a page that comes back shorter than
+            # `limit` is genuine exhaustion of that interval's real
+            # history, not an artifact of this request's own size.
+            candles = [c for c in candles if c.timestamp < before]
+
+        return candles[-limit:]
 
     def _latest_intraday_bar(self, symbol: str) -> Candle:
         """The real, most-recently-published 5-minute bar -- a light

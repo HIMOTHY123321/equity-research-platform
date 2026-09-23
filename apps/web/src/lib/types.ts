@@ -20,6 +20,9 @@ export interface CandlesResponse {
   symbol: string;
   timeframe: string;
   candles: Candle[];
+  has_more: boolean;
+  history_exhausted: boolean;
+  next_before: string | null;
 }
 
 export interface Quote {

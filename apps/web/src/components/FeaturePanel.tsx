@@ -1,3 +1,4 @@
+import { GlossaryHint } from "@/components/GlossaryHint";
 import { Block, Row } from "@/components/PanelPrimitives";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
 import {
@@ -73,7 +74,7 @@ export function FeaturePanel({ query }: { query: AsyncResource<FeatureSnapshot> 
           />
         </Block>
 
-        <Block title={`ATR (${atr.period})`}>
+        <Block title={<GlossaryHint termId="average-true-range" label={`Average True Range (${atr.period})`} />}>
           <Row label="Value" value={formatPrice(atr.value)} />
           <Row label="Method" value={atr.value === null ? "—" : atr.method} />
         </Block>
@@ -108,7 +109,7 @@ export function FeaturePanel({ query }: { query: AsyncResource<FeatureSnapshot> 
           <Row label="Position" value={moving_averages.sma200.position ?? "—"} />
         </Block>
 
-        <Block title="RELATIVE VOLUME">
+        <Block title={<GlossaryHint termId="relative-volume" label="Relative Volume (RVOL)" />}>
           <Row label="Current" value={formatVolume(volume.current_volume)} />
           <Row label="Average" value={formatVolume(volume.average_volume)} />
           <Row label="RVOL" value={formatRatio(volume.relative_volume)} />
@@ -116,7 +117,7 @@ export function FeaturePanel({ query }: { query: AsyncResource<FeatureSnapshot> 
         </Block>
 
         {intraday_relative_volume.status === "ok" && (
-          <Block title="INTRADAY RVOL">
+          <Block title={<GlossaryHint termId="relative-volume" label="Intraday RVOL" />}>
             <Row
               label="Today (thru)"
               value={formatVolume(intraday_relative_volume.cumulative_volume_today)}

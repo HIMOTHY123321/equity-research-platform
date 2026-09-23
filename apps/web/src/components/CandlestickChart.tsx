@@ -9,12 +9,14 @@ import {
   type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
+  type LogicalRange,
   type SeriesMarker,
   type Time,
   type UTCTimestamp,
 } from "lightweight-charts";
 import { useEffect, useRef, useState } from "react";
 
+import { countPrependedCandles, shiftLogicalRange } from "@/lib/chartHistoryMerge";
 import { liveCandleMatchesSelection, resolveLiveCandleAction } from "@/lib/chartLiveMerge";
 import { formatEnumLabel, formatExchangeTimestamp, swingClassificationAbbrev } from "@/lib/format";
 import type {
@@ -41,6 +43,11 @@ const MAX_SETUP_MARKERS_DRAWN = 8;
 const MAX_SWINGS_DRAWN_DEFAULT = 12;
 const MAX_BOS_DRAWN_DEFAULT = 3;
 const MAX_CHOCH_DRAWN_DEFAULT = 3;
+// (FINAL TERMINAL POLISH PASS #1) How close to the start of the loaded
+// series (in bars) the visible range must get before an older-history page
+// is requested -- close enough that the user never visibly runs out of
+// data while panning, far enough that a single page load stays ahead of it.
+const OLDER_HISTORY_TRIGGER_THRESHOLD_BARS = 20;
 
 export interface ChartDisplayOptions {
   structure: boolean;
@@ -108,6 +115,7 @@ export function CandlestickChart({
   display = DEFAULT_CHART_DISPLAY_OPTIONS,
   symbol,
   timeframe,
+  onNeedOlderHistory,
 }: {
   candles: Candle[];
   structure?: StructureOverlay;
@@ -136,6 +144,12 @@ export function CandlestickChart({
    * one (§13), even though `liveCandle` itself changed identity. */
   symbol: string;
   timeframe: string;
+  /** (FINAL TERMINAL POLISH PASS #1) Called when the visible range pans
+   * near the start of the currently-loaded series -- the caller (
+   * MarketWorkspace) owns the request-in-flight guard and exhaustion state;
+   * this component only ever signals "the user is looking near the edge",
+   * never fetches or tracks pagination state itself. */
+  onNeedOlderHistory?: () => void;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -146,6 +160,17 @@ export function CandlestickChart({
   useEffect(() => {
     candlesRef.current = candles;
   }, [candles]);
+  // Always reads the latest callback without forcing the range-change
+  // subscription (attached once, at chart creation) to be torn down and
+  // reattached every time the caller passes a new function identity.
+  const onNeedOlderHistoryRef = useRef(onNeedOlderHistory);
+  useEffect(() => {
+    onNeedOlderHistoryRef.current = onNeedOlderHistory;
+  }, [onNeedOlderHistory]);
+  // The previous render's ascending-sorted candles -- compared against the
+  // next set to detect a pure older-history prepend (see the `candles`
+  // effect below) vs. a fresh symbol/timeframe/range load.
+  const prevSortedCandlesRef = useRef<Candle[]>([]);
   // The newest UTCTimestamp actually committed to the series -- reset every
   // time `candles` is reloaded (new symbol/timeframe, or a refetch that
   // advanced the authoritative newest bar), read by the liveCandle effect
@@ -214,8 +239,20 @@ export function CandlestickChart({
     };
     chart.subscribeCrosshairMove(handleCrosshairMove);
 
+    // (FINAL TERMINAL POLISH PASS #1) Attached once, here, so it's never
+    // re-subscribed on every render -- always calls the *latest* callback
+    // via the ref, never a stale closure over the prop from mount time.
+    const handleVisibleLogicalRangeChange = (range: LogicalRange | null) => {
+      if (!range) return;
+      if (range.from <= OLDER_HISTORY_TRIGGER_THRESHOLD_BARS) {
+        onNeedOlderHistoryRef.current?.();
+      }
+    };
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
+
     return () => {
       chart.unsubscribeCrosshairMove(handleCrosshairMove);
+      chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleVisibleLogicalRangeChange);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
@@ -226,11 +263,21 @@ export function CandlestickChart({
 
   useEffect(() => {
     const series = seriesRef.current;
+    const chart = chartRef.current;
     if (!series) return;
 
     const sorted = [...candles].sort(
       (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
     );
+
+    // (FINAL TERMINAL POLISH PASS #1) A pan-left pagination page prepends
+    // older bars behind everything the user is already looking at -- the
+    // viewport must NOT jump. Detected purely from data shape (never a
+    // separate "is this a prepend" flag threaded through props), so it's
+    // correct regardless of *why* `candles` grew this way.
+    const prependCount = countPrependedCandles(prevSortedCandlesRef.current, sorted);
+    const preservedRange = prependCount > 0 ? chart?.timeScale().getVisibleLogicalRange() ?? null : null;
+
     series.setData(
       sorted.map((candle) => ({
         time: toUtcTimestamp(candle.timestamp),
@@ -246,7 +293,19 @@ export function CandlestickChart({
     latestSeriesTimeRef.current = sorted.length
       ? toUtcTimestamp(sorted[sorted.length - 1].timestamp)
       : null;
-    chartRef.current?.timeScale().fitContent();
+
+    if (preservedRange) {
+      // Every already-displayed bar's logical index shifted right by
+      // exactly `prependCount` -- shifting the saved range by the same
+      // amount keeps the same candles in view, no visual jump.
+      chart?.timeScale().setVisibleLogicalRange(shiftLogicalRange(preservedRange, prependCount));
+    } else {
+      // Fresh symbol/timeframe/range load (not a prepend) -- fitting the
+      // whole series is the correct, existing behavior here.
+      chart?.timeScale().fitContent();
+    }
+
+    prevSortedCandlesRef.current = sorted;
   }, [candles]);
 
   useEffect(() => {

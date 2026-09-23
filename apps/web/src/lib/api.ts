@@ -74,12 +74,17 @@ export async function checkApiHealth(): Promise<HealthStatus | null> {
   }
 }
 
+/** `before`, when given (lazy pan-left pagination), requests the `limit`
+ * candles immediately preceding that instant instead of the most recent
+ * `limit` -- an older-history page, never a fresh/initial load. */
 export function getCandles(
   symbol: string,
   timeframe: Timeframe,
   limit = 200,
+  before?: string,
 ): Promise<CandlesResponse> {
   const params = new URLSearchParams({ timeframe, limit: String(limit) });
+  if (before) params.set("before", before);
   return request<CandlesResponse>(`/api/market/${symbol}/candles?${params}`);
 }
 

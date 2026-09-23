@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { GlossaryHint } from "@/components/GlossaryHint";
 import {
   formatCatalystContextLabel,
   formatEvidenceMaturity,
@@ -13,7 +14,7 @@ import {
 } from "@/lib/format";
 import type { EvidencePacket, ResearchBrief } from "@/lib/types";
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: React.ReactNode; children: React.ReactNode }) {
   return (
     <div className="border-t border-border pt-2">
       <h6 className="text-[9px] font-semibold tracking-wide text-muted">{title}</h6>
@@ -62,7 +63,14 @@ export function EvidenceAuditTrail({ packet, brief }: { packet: EvidencePacket; 
         </span>
       </div>
 
-      <Section title="PACKET ID / AS OF / PIPELINE VERSION">
+      <Section
+        title={
+          <span className="inline-flex items-center gap-1">
+            PACKET ID / AS OF / PIPELINE VERSION
+            <GlossaryHint termId="as-of" />
+          </span>
+        }
+      >
         <p className="font-mono text-[10px]">{packet.packet_id}</p>
         <p>
           As of {formatExchangeTimestamp(packet.as_of)} · Pipeline v{packet.pipeline_version} · Schema v
@@ -70,7 +78,14 @@ export function EvidenceAuditTrail({ packet, brief }: { packet: EvidencePacket; 
         </p>
       </Section>
 
-      <Section title="MARKET DATA / NEWS / RESEARCH CUTOFFS">
+      <Section
+        title={
+          <span className="inline-flex items-center gap-1">
+            MARKET DATA / NEWS / RESEARCH CUTOFFS
+            <GlossaryHint termId="market-data-cutoff" />
+          </span>
+        }
+      >
         <p>
           Market data:{" "}
           {packet.market_data_cutoff ? formatExchangeTimestamp(packet.market_data_cutoff) : "unavailable"}

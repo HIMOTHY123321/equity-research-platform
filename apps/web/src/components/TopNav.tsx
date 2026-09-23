@@ -10,6 +10,7 @@ const NAV_ITEMS = [
   { href: "/forecasts", label: "Forecast Lab", symbolAware: true },
   { href: "/reports", label: "Reports", symbolAware: false },
   { href: "/watchlist", label: "Watchlist", symbolAware: false },
+  { href: "/glossary", label: "Glossary", symbolAware: false },
 ];
 
 function TopNavInner() {

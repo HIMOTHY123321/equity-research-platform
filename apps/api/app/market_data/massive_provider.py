@@ -19,6 +19,7 @@ import logging
 import time
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
+from typing import Optional
 
 import httpx
 
@@ -77,12 +78,18 @@ class MassiveMarketDataProvider(MarketDataProvider):
     def capabilities(self) -> ProviderCapabilities:
         return MASSIVE_CAPABILITIES
 
-    def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int = 200,
+        before: Optional[datetime] = None,
+    ) -> list[Candle]:
         if timeframe == Timeframe.FOUR_HOUR:
             hourly_limit = max(limit * 4, 50)
-            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, hourly_limit)
+            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, hourly_limit, before=before)
             return aggregate_hourly_to_4h(hourly)[-limit:]
-        return self._fetch_bars(symbol, timeframe, limit)
+        return self._fetch_bars(symbol, timeframe, limit, before=before)
 
     def get_latest_quote(self, symbol: str) -> Quote:
         data = self._request("GET", f"/v3/quotes/{symbol}", params={"limit": 1, "order": "desc"})
@@ -117,12 +124,19 @@ class MassiveMarketDataProvider(MarketDataProvider):
 
     # ---- internals ----------------------------------------------------------
 
-    def _fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+    def _fetch_bars(
+        self, symbol: str, timeframe: Timeframe, limit: int, before: Optional[datetime] = None
+    ) -> list[Candle]:
         multiplier, span = _MASSIVE_TIMEFRAME.get(timeframe, (None, None))
         if multiplier is None:
             raise ValueError(f"Massive does not support fetching {timeframe.value} bars directly")
 
-        to_date = exchange_trading_date(self._now())
+        # (#1 pagination) `to_date` anchors on the cursor's own trading date
+        # when paginating older history, instead of always "today" -- the
+        # Massive range endpoint is date-granular, not timestamp-granular,
+        # so the exact-instant `before` cutoff is still enforced by the
+        # strict `timestamp < before` filter below, same as yfinance.
+        to_date = exchange_trading_date(before) if before is not None else exchange_trading_date(self._now())
         # A generous lookback window so `limit` bars are actually available
         # even for coarse timeframes/thin trading days -- never fabricated,
         # just a wide enough REST query range.
@@ -145,6 +159,10 @@ class MassiveMarketDataProvider(MarketDataProvider):
                 break
 
         candles = _normalize_massive_bars(raw_bars, symbol, timeframe)
+        if before is not None:
+            # Strictly `< before` -- never duplicate the boundary candle the
+            # caller already has, mirrors yfinance_provider's pagination.
+            candles = [c for c in candles if c.timestamp < before]
         return candles[-limit:]
 
     def _request(self, method: str, path: str, params: dict | None = None) -> dict:

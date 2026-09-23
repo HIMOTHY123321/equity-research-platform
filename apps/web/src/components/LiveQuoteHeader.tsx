@@ -1,5 +1,6 @@
 "use client";
 
+import { GlossaryHint } from "@/components/GlossaryHint";
 import { formatAgeSeconds, formatExchangeTimestamp, formatFreshnessLabel, freshnessColorClass, freshnessDotClass } from "@/lib/format";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
@@ -71,6 +72,7 @@ export function LiveQuoteHeader({
           <span className={freshnessColorClass(freshness.freshness_state)}>
             {formatFreshnessLabel(freshness.freshness_state, streamingActive)}
           </span>
+          <GlossaryHint termId={streamingActive ? "real-time" : "latest-available"} />
         </span>
         <span className="text-muted" title={freshness.source_timestamp ? formatExchangeTimestamp(freshness.source_timestamp) : undefined}>
           {formatAgeSeconds(tickingAge)}
@@ -93,8 +95,9 @@ export function LiveQuoteHeader({
             <span title="Last trade">Last trade: {formatExchangeTimestamp(quote.last_trade_timestamp)}</span>
           )}
           {quote.nbbo_timestamp && (
-            <span title="NBBO quote">
+            <span className="inline-flex items-center gap-1" title="NBBO quote">
               NBBO: {quote.bid.toFixed(2)} / {quote.ask.toFixed(2)} @ {formatExchangeTimestamp(quote.nbbo_timestamp)}
+              <GlossaryHint termId="nbbo" />
             </span>
           )}
         </div>

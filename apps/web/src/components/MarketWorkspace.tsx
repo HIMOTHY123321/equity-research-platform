@@ -4,6 +4,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useState } from "react";
 
 import { CandlestickChart, DEFAULT_CHART_DISPLAY_OPTIONS, type ChartDisplayOptions } from "@/components/CandlestickChart";
+import { ChartLegend } from "@/components/ChartLegend";
 import { FeaturePanel } from "@/components/FeaturePanel";
 import { RangeSelector } from "@/components/RangeSelector";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
@@ -24,6 +25,7 @@ import {
   useStructure,
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
+import { useCandleHistoryPagination } from "@/hooks/useCandleHistoryPagination";
 import { useLiveFollow } from "@/hooks/useLiveFollow";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
@@ -91,8 +93,9 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
   const setupsQuery = useSetups(symbol, effectiveTimeframe);
   const catalystsQuery = useSymbolCatalysts(symbol);
   const { candles: liveCandles } = useLiveSymbol(symbol, [effectiveTimeframe]);
+  const history = useCandleHistoryPagination(symbol, effectiveTimeframe, candlesQuery);
 
-  const candles = candlesQuery.data?.candles ?? [];
+  const candles = history.candles;
   const chartState =
     candlesQuery.state === "ready" && candles.length === 0 ? "empty" : candlesQuery.state;
 
@@ -223,9 +226,31 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
                 display={display}
                 symbol={symbol}
                 timeframe={effectiveTimeframe}
+                onNeedOlderHistory={history.loadOlder}
               />
             )}
+            {/* (FINAL TERMINAL POLISH PASS #1) Pan-left pagination status --
+                non-blocking overlays so the chart itself is never obscured. */}
+            {chartState === "ready" && history.loadingOlder && (
+              <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded border border-border bg-surface/90 px-2.5 py-1 font-mono text-[10px] text-muted">
+                LOADING OLDER HISTORY…
+              </div>
+            )}
+            {chartState === "ready" && !history.loadingOlder && history.error && (
+              <div className="absolute bottom-2 left-1/2 flex -translate-x-1/2 items-center gap-2 rounded border border-negative/40 bg-surface/95 px-2.5 py-1 font-mono text-[10px] text-negative">
+                <span>Failed to load older history.</span>
+                <button type="button" onClick={history.retry} className="underline">
+                  RETRY
+                </button>
+              </div>
+            )}
+            {chartState === "ready" && !history.loadingOlder && !history.error && history.historyExhausted && (
+              <div className="pointer-events-none absolute bottom-2 left-1/2 -translate-x-1/2 rounded border border-border bg-surface/90 px-2.5 py-1 font-mono text-[10px] text-muted">
+                EARLIEST AVAILABLE DATA
+              </div>
+            )}
           </div>
+          <ChartLegend />
         </section>
       </div>
 

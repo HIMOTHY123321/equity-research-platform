@@ -73,15 +73,21 @@ class AlpacaMarketDataProvider(MarketDataProvider):
     def capabilities(self) -> ProviderCapabilities:
         return ALPACA_CAPABILITIES
 
-    def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int = 200,
+        before: Optional[datetime] = None,
+    ) -> list[Candle]:
         if timeframe == Timeframe.FOUR_HOUR:
             # ~2 regular-session 4H bars per trading day; pad generously so we
             # have enough 1H history to produce `limit` complete 4H bars.
             hourly_limit = max(limit * 4, 50)
-            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, hourly_limit)
+            hourly = self._fetch_bars(symbol, Timeframe.ONE_HOUR, hourly_limit, before=before)
             return aggregate_hourly_to_4h(hourly)[-limit:]
 
-        return self._fetch_bars(symbol, timeframe, limit)
+        return self._fetch_bars(symbol, timeframe, limit, before=before)
 
     def get_latest_quote(self, symbol: str) -> Quote:
         data = self._request("GET", f"/v2/stocks/{symbol}/quotes/latest")
@@ -115,7 +121,9 @@ class AlpacaMarketDataProvider(MarketDataProvider):
 
     # ---- internals ----------------------------------------------------------
 
-    def _fetch_bars(self, symbol: str, timeframe: Timeframe, limit: int) -> list[Candle]:
+    def _fetch_bars(
+        self, symbol: str, timeframe: Timeframe, limit: int, before: Optional[datetime] = None
+    ) -> list[Candle]:
         alpaca_timeframe = _ALPACA_TIMEFRAME.get(timeframe)
         if alpaca_timeframe is None:
             raise ValueError(f"Alpaca does not support fetching {timeframe.value} bars directly")
@@ -129,6 +137,10 @@ class AlpacaMarketDataProvider(MarketDataProvider):
                 "adjustment": "raw",
                 "feed": "iex",
             }
+            if before is not None:
+                # Alpaca's own real "end" cursor -- an actual older-page
+                # request, not a post-fetch filter over the recent window.
+                params["end"] = before.isoformat().replace("+00:00", "Z")
             if page_token:
                 params["page_token"] = page_token
             data = self._request("GET", f"/v2/stocks/{symbol}/bars", params=params)
@@ -150,7 +162,14 @@ class AlpacaMarketDataProvider(MarketDataProvider):
                 symbol,
             )
 
-        return result.candles[-limit:]
+        candles = result.candles
+        if before is not None:
+            # Alpaca's own `end` param is documented as inclusive -- this
+            # strict client-side filter is what actually guarantees the
+            # boundary candle is never duplicated, same contract as
+            # yfinance_provider/massive_provider.
+            candles = [c for c in candles if c.timestamp < before]
+        return candles[-limit:]
 
     def _request(self, method: str, path: str, params: dict | None = None) -> dict:
         attempt = 0

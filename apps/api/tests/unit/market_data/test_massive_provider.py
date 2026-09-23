@@ -76,6 +76,47 @@ def test_get_candles_4h_aggregates_from_hourly():
     assert all(c.timeframe == Timeframe.FOUR_HOUR for c in candles)
 
 
+def test_get_candles_before_cursor_anchors_range_on_cursor_date():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, json={"results": [BAR]})
+
+    provider = _provider(handler, now_fn=lambda: utc(2026, 8, 17, 18, 0))
+    cursor = utc(2025, 8, 17, 13, 0)
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, limit=10, before=cursor)
+
+    assert "/range/1/day/" in str(calls[0].url)
+    assert "2026-08" not in str(calls[0].url)
+
+
+def test_get_candles_before_cursor_excludes_boundary_bar():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": [BAR]})
+
+    provider = _provider(handler, now_fn=lambda: utc(2026, 8, 17, 18, 0))
+    cursor = utc(2025, 8, 17, 13, 0)  # exactly BAR's own timestamp
+    candles = provider.get_candles("AAPL", Timeframe.ONE_DAY, limit=10, before=cursor)
+
+    assert all(c.timestamp != cursor for c in candles)
+
+
+def test_get_candles_before_cursor_returns_ascending_order():
+    older_bars = [{**BAR, "t": BAR["t"] - d * 86_400_000} for d in range(5, 0, -1)]
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"results": older_bars})
+
+    provider = _provider(handler, now_fn=lambda: utc(2026, 8, 17, 18, 0))
+    candles = provider.get_candles(
+        "AAPL", Timeframe.ONE_DAY, limit=10, before=utc(2025, 8, 17, 13, 0)
+    )
+
+    timestamps = [c.timestamp for c in candles]
+    assert timestamps == sorted(timestamps)
+
+
 def test_get_latest_quote_success():
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/v3/quotes/AAPL"

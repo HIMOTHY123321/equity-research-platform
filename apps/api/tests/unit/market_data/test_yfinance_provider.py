@@ -205,6 +205,59 @@ def test_generic_error_retries_then_raises_provider_error():
     assert len(calls) == 3  # initial attempt + 2 retries
 
 
+def test_get_candles_before_cursor_returns_only_older_candles():
+    rows = [(utc(2026, 8, 10 + d, 4, 0), 100, 101, 99, 100.5, 1000) for d in range(10)]
+    ticker = FakeTicker(history_df=_df(rows))
+    provider = _provider(ticker)
+
+    cursor = utc(2026, 8, 15, 4, 0)
+    candles = provider.get_candles("SPY", Timeframe.ONE_DAY, limit=100, before=cursor)
+
+    assert all(c.timestamp < cursor for c in candles)
+    assert len(candles) == 5
+
+
+def test_get_candles_before_cursor_excludes_exact_boundary_bar():
+    rows = [(utc(2026, 8, 10 + d, 4, 0), 100, 101, 99, 100.5, 1000) for d in range(10)]
+    ticker = FakeTicker(history_df=_df(rows))
+    provider = _provider(ticker)
+
+    boundary = utc(2026, 8, 13, 4, 0)
+    candles = provider.get_candles("SPY", Timeframe.ONE_DAY, limit=100, before=boundary)
+
+    assert all(c.timestamp != boundary for c in candles)
+
+
+def test_get_candles_before_cursor_returns_candles_in_ascending_order():
+    rows = [(utc(2026, 8, 10 + d, 4, 0), 100, 101, 99, 100.5, 1000) for d in range(10)]
+    ticker = FakeTicker(history_df=_df(rows))
+    provider = _provider(ticker)
+
+    candles = provider.get_candles("SPY", Timeframe.ONE_DAY, limit=100, before=utc(2026, 8, 18, 4, 0))
+    timestamps = [c.timestamp for c in candles]
+    assert timestamps == sorted(timestamps)
+
+
+def test_get_candles_before_cursor_trims_to_limit_from_the_near_side():
+    rows = [(utc(2026, 8, 10 + d, 4, 0), 100, 101, 99, 100.5, 1000) for d in range(10)]
+    ticker = FakeTicker(history_df=_df(rows))
+    provider = _provider(ticker)
+
+    candles = provider.get_candles("SPY", Timeframe.ONE_DAY, limit=2, before=utc(2026, 8, 18, 4, 0))
+
+    assert len(candles) == 2
+    assert candles[-1].timestamp == utc(2026, 8, 17, 4, 0)
+
+
+def test_get_candles_before_cursor_at_earliest_history_returns_empty_honestly():
+    rows = [(utc(2026, 8, 10 + d, 4, 0), 100, 101, 99, 100.5, 1000) for d in range(10)]
+    ticker = FakeTicker(history_df=_df(rows))
+    provider = _provider(ticker)
+
+    candles = provider.get_candles("SPY", Timeframe.ONE_DAY, limit=100, before=utc(2026, 8, 10, 4, 0))
+    assert candles == []
+
+
 def test_extended_hours_zero_volume_is_preserved_not_fabricated():
     row = (utc(2026, 8, 17, 8, 0), 100, 101, 99, 100.5, 0)  # premarket, real zero volume
     ticker = FakeTicker(history_df=_df([row]))

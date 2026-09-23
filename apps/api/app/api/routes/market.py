@@ -98,13 +98,30 @@ def get_candles(
     # never "however many bars exist" -- see docs/decisions on avoiding
     # unbounded history payloads.
     limit: int = Query(200, ge=1, le=15000),
+    # (FINAL TERMINAL POLISH PASS #1: lazy pan-left pagination) When given,
+    # returns the `limit` candles immediately preceding this instant instead
+    # of the most recent `limit` -- the chart's "load older history on pan"
+    # flow. Omitted entirely on a normal/initial load.
+    before: datetime | None = Query(None),
     provider: MarketDataProvider = Depends(get_market_data_provider),
 ) -> CandlesResponse:
     validated_symbol = _validated_symbol(symbol)
     validated_timeframe = _validated_timeframe(timeframe)
-    candles = provider.get_candles(validated_symbol, validated_timeframe, limit=limit)
+    candles = provider.get_candles(validated_symbol, validated_timeframe, limit=limit, before=before)
+    # A chunk shorter than requested is genuine provider-side history
+    # exhaustion (every provider already fetches its own real maximum
+    # window before slicing to `limit` -- see yfinance/alpaca/massive
+    # _fetch_bars) -- never a fabricated "no more data" guess.
+    has_more = len(candles) == limit and limit > 0
+    history_exhausted = not has_more
+    next_before = candles[0].timestamp.isoformat() if has_more and candles else None
     return CandlesResponse(
-        symbol=validated_symbol, timeframe=validated_timeframe.value, candles=candles
+        symbol=validated_symbol,
+        timeframe=validated_timeframe.value,
+        candles=candles,
+        has_more=has_more,
+        history_exhausted=history_exhausted,
+        next_before=next_before,
     )
 
 

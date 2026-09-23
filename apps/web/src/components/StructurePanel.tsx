@@ -1,3 +1,4 @@
+import { GlossaryHint } from "@/components/GlossaryHint";
 import { Block, Row } from "@/components/PanelPrimitives";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
 import {
@@ -70,7 +71,7 @@ export function StructurePanel({ query }: { query: AsyncResource<MarketStructure
           />
         </Block>
 
-        <Block title="LAST BOS">
+        <Block title={<GlossaryHint termId="break-of-structure" label="Last Break of Structure (BOS)" />}>
           <Row
             label="Event"
             value={lastBos ? `${capitalize(lastBos.direction)} @ ${formatPrice(lastBos.broken_level)}` : "—"}
@@ -78,7 +79,7 @@ export function StructurePanel({ query }: { query: AsyncResource<MarketStructure
           />
         </Block>
 
-        <Block title="LAST CHOCH">
+        <Block title={<GlossaryHint termId="change-of-character" label="Last Change of Character (CHOCH)" />}>
           <Row
             label="Event"
             value={

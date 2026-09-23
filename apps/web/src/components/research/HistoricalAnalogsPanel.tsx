@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { GlossaryHint } from "@/components/GlossaryHint";
 import { formatAnalogTimestamp, formatSignedPercent } from "@/lib/format";
 import type { AnalogDiversityReport, AnalogResult } from "@/lib/types";
 
@@ -46,8 +47,9 @@ function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetu
           )}
         </span>
         <span className="flex flex-col items-end">
-          <span className="font-mono text-accent" title="Lower distance = more similar. Normalized across matched feature dimensions -- expand for the contributing dimensions.">
+          <span className="inline-flex items-center gap-1 font-mono text-accent" title="Lower distance = more similar. Normalized across matched feature dimensions -- expand for the contributing dimensions.">
             distance {analog.distance.distance.toFixed(3)}
+            <GlossaryHint termId="analog-distance" />
           </span>
           {/* (#11) Visible, not just a hover tooltip -- distance is not a
               probability or confidence score, only a similarity ranking. */}
@@ -99,8 +101,14 @@ function AnalogRow({ analog, querySetupType }: { analog: AnalogResult; querySetu
                 <li>1-bar: <span className="font-mono">{formatSignedPercent(analog.outcome.one_bar_directional_return_percent)}</span></li>
                 <li>5-bar: <span className="font-mono">{formatSignedPercent(analog.outcome.five_bar_directional_return_percent)}</span></li>
                 <li>10-bar: <span className="font-mono">{formatSignedPercent(analog.outcome.ten_bar_directional_return_percent)}</span></li>
-                <li>MFE: <span className="font-mono text-positive">{analog.outcome.mfe_atr?.toFixed(2) ?? "—"} ATR</span></li>
-                <li>MAE: <span className="font-mono text-negative">{analog.outcome.mae_atr?.toFixed(2) ?? "—"} ATR</span></li>
+                <li>
+                  <GlossaryHint termId="maximum-favorable-excursion" label="MFE" />:{" "}
+                  <span className="font-mono text-positive">{analog.outcome.mfe_atr?.toFixed(2) ?? "—"} ATR</span>
+                </li>
+                <li>
+                  <GlossaryHint termId="maximum-adverse-excursion" label="MAE" />:{" "}
+                  <span className="font-mono text-negative">{analog.outcome.mae_atr?.toFixed(2) ?? "—"} ATR</span>
+                </li>
               </ul>
             ) : (
               <p className="text-muted">not evaluated</p>

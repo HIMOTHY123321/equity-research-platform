@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 
+import { GlossaryHint } from "@/components/GlossaryHint";
 import { Block, Row } from "@/components/PanelPrimitives";
 import type { AsyncResource } from "@/hooks/useAsyncResource";
 import { formatBarsAgo, formatPrice, formatSourceLabel, strengthLabel } from "@/lib/format";
@@ -18,11 +19,12 @@ function ZoneSummary({ zone }: { zone: Zone }) {
       <div className="flex items-baseline justify-between">
         <span className="font-mono text-sm text-foreground">{zoneRangeLabel(zone)}</span>
         <span
-          className={`font-mono text-xs ${
+          className={`inline-flex items-center gap-1 font-mono text-xs ${
             zone.kind === "resistance" ? "text-negative" : "text-positive"
           }`}
         >
           {strengthLabel(zone.strength.total)} — {zone.strength.total.toFixed(0)}/100
+          <GlossaryHint termId="level-strength" />
         </span>
       </div>
       {zone.price_relationship && (

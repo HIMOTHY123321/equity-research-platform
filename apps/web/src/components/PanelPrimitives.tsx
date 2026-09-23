@@ -17,7 +17,7 @@ export function Row({
   );
 }
 
-export function Block({ title, children }: { title: string; children: ReactNode }) {
+export function Block({ title, children }: { title: ReactNode; children: ReactNode }) {
   return (
     <div className="rounded border border-border bg-surface-raised p-3">
       <h3 className="mb-1.5 text-[11px] font-semibold tracking-wide text-muted">{title}</h3>

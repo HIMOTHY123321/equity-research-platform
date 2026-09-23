@@ -197,6 +197,49 @@ def test_404_raises_invalid_symbol_error():
         provider.get_candles("NOTASYMBOL", Timeframe.ONE_DAY)
 
 
+def test_get_candles_before_cursor_sends_native_end_param():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return _bars_response([BAR])
+
+    provider = _provider(handler)
+    cursor = utc(2026, 8, 17, 14, 30)
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, limit=10, before=cursor)
+
+    assert calls[0].url.params["end"] == "2026-08-17T14:30:00Z"
+
+
+def test_get_candles_before_cursor_excludes_boundary_bar_at_cursor():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return _bars_response(
+            [
+                {**BAR, "t": "2026-08-15T14:30:00Z"},
+                {**BAR, "t": "2026-08-17T14:30:00Z"},  # exactly at the cursor
+            ]
+        )
+
+    provider = _provider(handler)
+    cursor = utc(2026, 8, 17, 14, 30)
+    candles = provider.get_candles("AAPL", Timeframe.ONE_DAY, limit=10, before=cursor)
+
+    assert all(c.timestamp != cursor for c in candles)
+
+
+def test_get_candles_no_before_cursor_omits_end_param():
+    calls = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return _bars_response([BAR])
+
+    provider = _provider(handler)
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, limit=10)
+
+    assert "end" not in calls[0].url.params
+
+
 def test_empty_bars_response_returns_empty_list_without_fabricating():
     def handler(request: httpx.Request) -> httpx.Response:
         return _bars_response([])
