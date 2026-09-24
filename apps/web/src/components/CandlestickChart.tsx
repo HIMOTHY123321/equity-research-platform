@@ -23,6 +23,7 @@ import type {
   BreakOfStructureEvent,
   Candle,
   ChangeOfCharacterEvent,
+  DecisionPlan,
   ForwardForecast,
   LiveCandle,
   SetupCandidate,
@@ -35,6 +36,22 @@ const SUPPORT_COLOR = "#22c55e";
 const CHOCH_COLOR = "#eab308";
 const SETUP_COLOR = "#a78bfa";
 const FORECAST_COLOR = "#38bdf8";
+const DECISION_COLOR = "#f97316";
+const MAX_DECISION_MARKERS_DRAWN = 8;
+
+// (Phase 13) One abbreviated chart label per DecisionPlan state -- unobtrusive
+// by design (§ "chart integration" of the spec): only the plan's LAST
+// transition is ever drawn, never every historical transition.
+const DECISION_STATE_MARKER_LABEL: Record<string, string> = {
+  watching: "WATCH",
+  entry_conditions_met: "ENTRY",
+  active_thesis: "THESIS",
+  thesis_strengthening: "THESIS+",
+  thesis_weakening: "THESIS-",
+  invalidated: "INVALID",
+  exit_conditions_met: "EXIT",
+  expired: "EXPIRED",
+};
 const MAX_ZONES_DRAWN = 6;
 const MAX_SETUP_MARKERS_DRAWN = 8;
 // Uncapped defaults for structural pivots would draw one marker per
@@ -54,6 +71,7 @@ export interface ChartDisplayOptions {
   supportResistance: boolean;
   setups: boolean;
   allPivots: boolean;
+  decisions: boolean;
 }
 
 export const DEFAULT_CHART_DISPLAY_OPTIONS: ChartDisplayOptions = {
@@ -61,6 +79,7 @@ export const DEFAULT_CHART_DISPLAY_OPTIONS: ChartDisplayOptions = {
   supportResistance: true,
   setups: true,
   allPivots: false,
+  decisions: true,
 };
 
 function toUtcTimestamp(isoTimestamp: string): UTCTimestamp {
@@ -111,6 +130,7 @@ export function CandlestickChart({
   zones,
   setups,
   forecasts,
+  decisions,
   liveCandle,
   display = DEFAULT_CHART_DISPLAY_OPTIONS,
   symbol,
@@ -122,6 +142,10 @@ export function CandlestickChart({
   zones?: ZoneOverlay;
   setups?: SetupCandidate[];
   forecasts?: ForwardForecast[];
+  /** (Phase 13) DecisionPlans for the current symbol/timeframe -- only the
+   * LAST transition of each is drawn, at its `occurred_at` (the real
+   * moment that state change happened, never a current-time label). */
+  decisions?: DecisionPlan[];
   /** Phase 12.1 (#X): the current forming bar, supplied by the caller via
    * useLiveSymbol -- updates the chart's rightmost candle automatically,
    * every time a new quote arrives, with no refresh. Purely visual: never
@@ -446,9 +470,28 @@ export function CandlestickChart({
       });
     }
 
+    // (Phase 13) Unobtrusive by design: one marker per DecisionPlan, at its
+    // most recent transition -- never the full transition history (that
+    // lives in the Decision Monitor's own state timeline).
+    if (display.decisions) {
+      const livePlans = (decisions ?? []).slice(0, MAX_DECISION_MARKERS_DRAWN);
+      for (const plan of livePlans) {
+        const lastTransition = plan.transitions[plan.transitions.length - 1];
+        if (!lastTransition) continue;
+        const bullish = plan.direction === "bullish";
+        markers.push({
+          time: toUtcTimestamp(lastTransition.occurred_at),
+          position: bullish ? "belowBar" : "aboveBar",
+          shape: plan.state === "invalidated" ? "arrowDown" : "circle",
+          color: DECISION_COLOR,
+          text: DECISION_STATE_MARKER_LABEL[plan.state] ?? plan.state.toUpperCase(),
+        });
+      }
+    }
+
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     markersApi.setMarkers(markers);
-  }, [structure, setups, forecasts, display]);
+  }, [structure, setups, forecasts, decisions, display]);
 
   useEffect(() => {
     const series = seriesRef.current;

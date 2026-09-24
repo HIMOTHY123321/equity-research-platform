@@ -1635,3 +1635,179 @@ export interface SymbolSearchResponse {
   query: string;
   results: SymbolMatch[];
 }
+
+// ---- Trader Decision Engine (Phase 13) ------------------------------------
+//
+// A DecisionPlan is a deterministic, evidence-grounded monitoring record --
+// never BUY/SELL, never a confidence percentage, never a score. Every state
+// below is the ONLY vocabulary allowed to describe a plan's status; the
+// backend state machine (app.decision_engine.state_machine) is the only
+// place a transition can happen, so this UI only ever displays already-
+// persisted state, never computes or predicts one.
+
+export type DecisionStateKind =
+  | "detected"
+  | "evaluating"
+  | "abstain"
+  | "watching"
+  | "entry_conditions_met"
+  | "active_thesis"
+  | "thesis_strengthening"
+  | "thesis_weakening"
+  | "invalidated"
+  | "exit_conditions_met"
+  | "expired";
+
+export const DECISION_TERMINAL_STATES: DecisionStateKind[] = ["abstain", "invalidated", "exit_conditions_met", "expired"];
+
+export type DecisionAbstentionReasonKind =
+  | "insufficient_evidence"
+  | "weak_evidence"
+  | "contradictory_evidence"
+  | "no_valid_setup"
+  | "stale_data"
+  | "unsupported_timeframe"
+  | "research_gate_failure"
+  | "missing_market_data";
+
+export type ConditionTypeKind =
+  | "price_above"
+  | "price_below"
+  | "close_above"
+  | "close_below"
+  | "level_hold"
+  | "level_reclaim"
+  | "level_rejection"
+  | "breakout_confirmed"
+  | "retest_confirmed"
+  | "structure_bos"
+  | "structure_choch"
+  | "trend_alignment"
+  | "rvol_above"
+  | "rvol_below"
+  | "volume_confirmation"
+  | "support_holds"
+  | "resistance_holds"
+  | "gap_fill_threshold"
+  | "gap_hold_threshold"
+  | "volatility_regime"
+  | "catalyst_present"
+  | "catalyst_absent"
+  | "time_elapsed"
+  | "session_condition";
+
+export type ConditionRoleKind = "entry" | "invalidation" | "exit" | "monitoring";
+
+export type ConditionStatusKind = "pending" | "passed" | "failed" | "unavailable";
+
+export type BarSemanticsKind = "tick" | "forming_bar" | "completed_bar";
+
+export interface DecisionCondition {
+  id: string;
+  role: ConditionRoleKind;
+  type: ConditionTypeKind;
+  description: string;
+  timeframe: string;
+  bar_semantics: BarSemanticsKind;
+  operator: string;
+  required_value: number | null;
+  actual_value: number | null;
+  status: ConditionStatusKind;
+  evaluated_at: string | null;
+  source_evidence_ref: string | null;
+}
+
+export interface DecisionTransition {
+  transition_id: string;
+  decision_plan_id: string;
+  from_state: DecisionStateKind | null;
+  to_state: DecisionStateKind;
+  occurred_at: string;
+  as_of: string;
+  reason: string;
+  trigger_condition_ids: string[];
+  evidence_refs: string[];
+  pipeline_version: string;
+}
+
+export interface ActivationSnapshot {
+  activated_at: string;
+  activation_price_reference: number | null;
+  structure_by_timeframe: Record<string, string>;
+  nearest_support_price: number | null;
+  nearest_resistance_price: number | null;
+  rvol: number | null;
+  atr: number | null;
+  catalyst_label: string | null;
+  invalidation_distance: number | null;
+  evidence_packet_id: string | null;
+  forecast_refs: string[];
+}
+
+export type ResearchStatusLabelKind = "research_monitoring_only" | "insufficient_for_ranked_signal";
+
+export interface DecisionPlan {
+  decision_plan_id: string;
+  symbol: string;
+  timeframe: string;
+  setup_id: string;
+  setup_type: string;
+  direction: "bullish" | "bearish";
+
+  created_at: string;
+  as_of: string;
+  state: DecisionStateKind;
+
+  entry_conditions: DecisionCondition[];
+  invalidation_conditions: DecisionCondition[];
+  exit_conditions: DecisionCondition[];
+  monitoring_conditions: DecisionCondition[];
+
+  transitions: DecisionTransition[];
+  activation_snapshot: ActivationSnapshot | null;
+
+  research_status: ResearchStatusLabelKind[];
+  evidence_quality: string | null;
+  ranking_gate_status: string;
+
+  abstention_reason: DecisionAbstentionReasonKind | null;
+
+  source_setup_snapshot_id: string | null;
+  source_evidence_packet_id: string | null;
+
+  pipeline_version: string;
+  schema_version: string;
+}
+
+export interface DecisionConditionSummary {
+  id: string;
+  description: string;
+  status: ConditionStatusKind;
+  actual_value: number | null;
+  required_value: number | null;
+}
+
+export interface DecisionEvidencePacket {
+  decision_plan_id: string;
+  symbol: string;
+  timeframe: string;
+  setup_type: string;
+  direction: string;
+  state: DecisionStateKind;
+  as_of: string;
+
+  satisfied_entry_conditions: DecisionConditionSummary[];
+  missing_entry_conditions: DecisionConditionSummary[];
+  active_invalidation_conditions: DecisionConditionSummary[];
+  active_exit_conditions: DecisionConditionSummary[];
+  conflicts: string[];
+  research_status: string[];
+  last_transition_reason: string | null;
+}
+
+export interface DecisionExplanations {
+  why_now: string;
+  why_not_yet: string;
+  what_would_change_state: string[];
+  is_terminal: boolean;
+}

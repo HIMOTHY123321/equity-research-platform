@@ -6,6 +6,10 @@ import type {
   CatalystEvent,
   CatalystEventDetail,
   CatalystResearchQueryResponse,
+  DecisionEvidencePacket,
+  DecisionExplanations,
+  DecisionPlan,
+  DecisionTransition,
   EvidencePacket,
   FeatureSnapshot,
   ForecastCategoryKind,
@@ -452,6 +456,46 @@ export function getForecastPerformance(symbol?: string): Promise<ForecastPerform
   const query = new URLSearchParams();
   if (symbol) query.set("symbol", symbol);
   return request<ForecastPerformanceResponse>(`/api/forecasts/performance?${query}`);
+}
+
+// ---- Trader Decision Engine (Phase 13) ------------------------------------
+//
+// `scanDecisions` always evaluates "right now" -- same no-backfill shape as
+// postForecast above -- and is the only way a new DecisionPlan is created
+// from this client; every other call here only ever reads already-
+// persisted, already-decided state.
+
+export function scanDecisions(symbol: string, timeframe: Timeframe): Promise<DecisionPlan[]> {
+  const query = new URLSearchParams({ timeframe });
+  return request<DecisionPlan[]>(`/api/decisions/${symbol}/scan?${query}`, { method: "POST" });
+}
+
+export function listDecisions(
+  params: { symbol?: string; timeframe?: string; state?: string; openOnly?: boolean; limit?: number } = {}
+): Promise<DecisionPlan[]> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.state) query.set("state", params.state);
+  if (params.openOnly) query.set("open_only", "true");
+  query.set("limit", String(params.limit ?? 200));
+  return request<DecisionPlan[]>(`/api/decisions?${query}`);
+}
+
+export function getDecision(decisionPlanId: string): Promise<DecisionPlan> {
+  return request<DecisionPlan>(`/api/decisions/${decisionPlanId}`);
+}
+
+export function getDecisionTransitions(decisionPlanId: string): Promise<DecisionTransition[]> {
+  return request<DecisionTransition[]>(`/api/decisions/${decisionPlanId}/transitions`);
+}
+
+export function getDecisionEvidence(decisionPlanId: string): Promise<DecisionEvidencePacket> {
+  return request<DecisionEvidencePacket>(`/api/decisions/${decisionPlanId}/evidence`);
+}
+
+export function getDecisionExplanations(decisionPlanId: string): Promise<DecisionExplanations> {
+  return request<DecisionExplanations>(`/api/decisions/${decisionPlanId}/explanations`);
 }
 
 export function getForecastGate(): Promise<ForwardValidationGateEvaluation> {

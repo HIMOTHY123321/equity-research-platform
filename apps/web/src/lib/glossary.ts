@@ -22,7 +22,8 @@ export type GlossaryCategoryId =
   | "catalysts_news"
   | "evidence_validation"
   | "live_market_data"
-  | "risk_trade_management";
+  | "risk_trade_management"
+  | "decision_engine";
 
 export interface GlossaryCategory {
   id: GlossaryCategoryId;
@@ -41,6 +42,7 @@ export const GLOSSARY_CATEGORIES: GlossaryCategory[] = [
   { id: "evidence_validation", label: "Evidence & Validation" },
   { id: "live_market_data", label: "Live Market Data" },
   { id: "risk_trade_management", label: "Risk / Trade Management" },
+  { id: "decision_engine", label: "Decision Engine" },
 ];
 
 export interface GlossaryTermEntry {
@@ -1369,6 +1371,125 @@ export const GLOSSARY_TERMS: GlossaryTermEntry[] = [
     whyItMatters: "A key measure of realized risk, distinct from a single trade's MAE.",
     howDeskUsesIt: "Referenced only in educational context; the desk does not track a live portfolio.",
     related: ["maximum-adverse-excursion"],
+  },
+
+  // ---- L. Decision Engine (Phase 13) ------------------------------------
+  {
+    id: "decision-plan",
+    term: "Decision Plan",
+    category: "decision_engine",
+    shortDefinition: "A frozen record that turns one qualified setup into explicit, typed entry/invalidation/exit conditions the desk monitors going forward.",
+    whyItMatters: "It is the one place the desk's monitoring rules for a setup live, and it never quietly changes once created.",
+    howDeskUsesIt: "The Decision Monitor shows one card per Decision Plan; its state and conditions are the entire basis of everything else in this category.",
+    related: ["decision-condition", "watching", "active-thesis"],
+  },
+  {
+    id: "decision-condition",
+    term: "Decision Condition",
+    category: "decision_engine",
+    shortDefinition: "One typed, deterministic fact a Decision Plan checks -- e.g. \"5m close above $226.40\" -- with an actual value, a required value, and a status.",
+    whyItMatters: "Conditions are never free text or a vague feeling; each one is independently checkable and either PENDING, PASSED, FAILED, or UNAVAILABLE.",
+    howDeskUsesIt: "Entry, invalidation, exit, and monitoring conditions together make up a Decision Plan; \"why not yet\" and \"why now\" are built directly from them.",
+    related: ["decision-plan"],
+  },
+  {
+    id: "watching",
+    term: "Watching",
+    category: "decision_engine",
+    shortDefinition: "A Decision Plan state: entry conditions are defined and being monitored, but not all of them are satisfied yet.",
+    whyItMatters: "This is the \"waiting for confirmation\" state -- nothing has happened yet that would justify a stronger label.",
+    howDeskUsesIt: "WATCHING plans show exactly which entry conditions are still missing, with actual vs. required values.",
+    related: ["entry-conditions-met", "expired"],
+  },
+  {
+    id: "entry-conditions-met",
+    term: "Entry Conditions Met",
+    category: "decision_engine",
+    shortDefinition: "A Decision Plan state: every predefined entry condition has now been satisfied.",
+    whyItMatters: "This is a factual statement about what occurred in the market, never advice to open a trade.",
+    howDeskUsesIt: "Reaching this state immediately begins prospective monitoring as an Active Thesis.",
+    related: ["watching", "active-thesis"],
+  },
+  {
+    id: "active-thesis",
+    term: "Active Thesis",
+    category: "decision_engine",
+    shortDefinition: "A Decision Plan state: the predefined scenario occurred and is now being monitored prospectively against a frozen activation snapshot.",
+    whyItMatters: "\"Active\" describes the desk's monitoring, not a position the user holds.",
+    howDeskUsesIt: "Every later strengthening/weakening judgment compares current evidence back to exactly this snapshot.",
+    related: ["activation-snapshot", "thesis-strengthening", "thesis-weakening"],
+  },
+  {
+    id: "thesis-strengthening",
+    term: "Thesis Strengthening",
+    category: "decision_engine",
+    shortDefinition: "An Active Thesis sub-state: deterministic evidence has moved favorably since activation (e.g. RVOL improved, structure aligned).",
+    whyItMatters: "Strengthening is read directly off explicit evidence changes, never an arbitrary score.",
+    howDeskUsesIt: "Shown with the specific evidence changes that produced the classification.",
+    related: ["active-thesis", "evidence-diff", "thesis-weakening"],
+  },
+  {
+    id: "thesis-weakening",
+    term: "Thesis Weakening",
+    category: "decision_engine",
+    shortDefinition: "An Active Thesis sub-state: deterministic evidence has moved unfavorably since activation (e.g. RVOL deteriorated, opposing structure formed).",
+    whyItMatters: "Weakening evidence does not by itself mean the thesis is invalidated -- that is a separate, stricter state.",
+    howDeskUsesIt: "Shown with the specific evidence changes that produced the classification.",
+    related: ["active-thesis", "evidence-diff", "invalidated"],
+  },
+  {
+    id: "invalidated",
+    term: "Invalidated",
+    category: "decision_engine",
+    shortDefinition: "A Decision Plan's strongest terminal state: a predefined invalidation condition was met, with an exact reason, price, and timestamp.",
+    whyItMatters: "Once invalidated, a plan's original thresholds are never retroactively moved, even if later price action looks more favorable.",
+    howDeskUsesIt: "Terminal -- an invalidated plan stops evaluating further conditions.",
+    related: ["decision-plan", "exit-conditions-met"],
+  },
+  {
+    id: "exit-conditions-met",
+    term: "Exit Conditions Met",
+    category: "decision_engine",
+    shortDefinition: "A terminal state reached when a predefined evidence-based exit condition fires on an Active Thesis (not a take-profit/stop-loss order).",
+    whyItMatters: "Distinct from Invalidated: an exit condition describes the thesis playing out or expiring on its own terms, not being proven wrong.",
+    howDeskUsesIt: "Shown with exactly which exit condition fired.",
+    related: ["active-thesis", "invalidated"],
+  },
+  {
+    id: "expired",
+    term: "Expired",
+    category: "decision_engine",
+    shortDefinition: "A terminal state reached when a Watching plan's monitoring window closes before entry conditions were ever completed.",
+    whyItMatters: "Distinguishes \"never happened\" from \"happened and then failed\" (Invalidated).",
+    howDeskUsesIt: "Shown with the monitoring window that closed and which entry conditions were still missing.",
+    related: ["watching"],
+  },
+  {
+    id: "evidence-diff",
+    term: "Evidence Diff",
+    category: "decision_engine",
+    shortDefinition: "A deterministic, field-by-field comparison between an Active Thesis's Activation Snapshot and its current evidence.",
+    whyItMatters: "No AI interpretation is used to produce it -- it is a mechanical comparison of typed facts.",
+    howDeskUsesIt: "Drives the Thesis Strengthening/Weakening classification and its listed reasons.",
+    related: ["activation-snapshot", "thesis-strengthening", "thesis-weakening"],
+  },
+  {
+    id: "activation-snapshot",
+    term: "Activation Snapshot",
+    category: "decision_engine",
+    shortDefinition: "The frozen market evidence (structure, RVOL, ATR, nearest S/R) captured the instant a Decision Plan enters Active Thesis.",
+    whyItMatters: "This is the fixed baseline every later evidence diff compares against -- it is never recomputed or adjusted later.",
+    howDeskUsesIt: "Shown alongside current evidence so a strengthening/weakening claim is always traceable to a specific before/after.",
+    related: ["active-thesis", "evidence-diff"],
+  },
+  {
+    id: "monitoring-window",
+    term: "Monitoring Window",
+    category: "decision_engine",
+    shortDefinition: "The bounded period a Watching Decision Plan is allowed to wait for entry conditions before it Expires.",
+    whyItMatters: "Prevents a stale setup from being monitored indefinitely with no resolution.",
+    howDeskUsesIt: "Modeled as a typed time_elapsed exit condition on the plan, visible in \"what would change the state\".",
+    related: ["watching", "expired"],
   },
 ];
 

@@ -17,6 +17,7 @@ from app.api.deps import (
 )
 from app.api.routes import (
     analysis,
+    decisions,
     forecasts,
     live,
     market,
@@ -133,6 +134,7 @@ app.include_router(news.catalyst_router)
 app.include_router(research_catalysts.router)
 app.include_router(analysis.router)
 app.include_router(forecasts.router)
+app.include_router(decisions.router)
 app.include_router(live.router)
 app.include_router(symbols.router)
 

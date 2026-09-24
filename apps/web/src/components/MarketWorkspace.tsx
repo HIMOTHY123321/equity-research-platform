@@ -5,6 +5,7 @@ import { Suspense, useCallback, useState } from "react";
 
 import { CandlestickChart, DEFAULT_CHART_DISPLAY_OPTIONS, type ChartDisplayOptions } from "@/components/CandlestickChart";
 import { ChartLegend } from "@/components/ChartLegend";
+import { DecisionMonitorPanel } from "@/components/DecisionMonitorPanel";
 import { FeaturePanel } from "@/components/FeaturePanel";
 import { RangeSelector } from "@/components/RangeSelector";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
@@ -26,6 +27,7 @@ import {
   useSymbolCatalysts,
 } from "@/hooks/useMarketQueries";
 import { useCandleHistoryPagination } from "@/hooks/useCandleHistoryPagination";
+import { useDecisionPlans } from "@/hooks/useDecisionPlans";
 import { useLiveFollow } from "@/hooks/useLiveFollow";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
@@ -91,6 +93,7 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
   const structureQuery = useStructure(symbol, effectiveTimeframe);
   const levelsQuery = useLevels(symbol, effectiveTimeframe);
   const setupsQuery = useSetups(symbol, effectiveTimeframe);
+  const decisionsQuery = useDecisionPlans(symbol, effectiveTimeframe);
   const catalystsQuery = useSymbolCatalysts(symbol);
   const { candles: liveCandles } = useLiveSymbol(symbol, [effectiveTimeframe]);
   const history = useCandleHistoryPagination(symbol, effectiveTimeframe, candlesQuery);
@@ -123,6 +126,7 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
                     ["structure", "Structure"],
                     ["supportResistance", "S/R"],
                     ["setups", "Setups"],
+                    ["decisions", "Decisions"],
                     ["allPivots", "All Pivots"],
                   ] as [keyof ChartDisplayOptions, string][]
                 ).map(([key, label]) => (
@@ -217,6 +221,7 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
                     ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates]
                     : undefined
                 }
+                decisions={decisionsQuery.data ?? undefined}
                 // (#6) Paused (autoFollow=false) suppresses the live overlay
                 // so the forming candle stops visually updating while the
                 // user is inspecting an older part of the chart -- events
@@ -259,6 +264,10 @@ function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
           data -- the most "debug terminal" of these panels -- comes last. */}
       <section className="rounded-md border border-border bg-surface p-3">
         <SetupInspectorPanel query={setupsQuery} />
+      </section>
+
+      <section className="rounded-md border border-border bg-surface p-3">
+        <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} />
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">

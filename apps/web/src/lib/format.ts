@@ -159,6 +159,29 @@ export function formatLifecycleState(state: string): string {
   return LIFECYCLE_STATE_LABELS[state] ?? state;
 }
 
+// ---- Phase 13: Trader Decision Engine ------------------------------------
+//
+// The only vocabulary allowed to describe a DecisionPlan's status -- see
+// app.decision_engine.schemas.DecisionState. No BUY/SELL/confidence
+// language anywhere in this map.
+const DECISION_STATE_LABELS: Record<string, string> = {
+  detected: "Detected",
+  evaluating: "Evaluating",
+  abstain: "Abstain",
+  watching: "Watching",
+  entry_conditions_met: "Entry Conditions Met",
+  active_thesis: "Active Thesis",
+  thesis_strengthening: "Thesis Strengthening",
+  thesis_weakening: "Thesis Weakening",
+  invalidated: "Invalidated",
+  exit_conditions_met: "Exit Conditions Met",
+  expired: "Expired",
+};
+
+export function formatDecisionState(state: string): string {
+  return DECISION_STATE_LABELS[state] ?? state;
+}
+
 // ---- Phase 12 (#A/#L): exchange-timezone timestamps, full precision -----
 //
 // US-equities default: `YYYY-MM-DD HH:mm:ss EST/EDT` in America/New_York,

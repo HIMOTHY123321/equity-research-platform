@@ -752,3 +752,73 @@ class ForwardValidationGateResultRecord(Base):
     decision: Mapped[str] = mapped_column(String(32), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 13: Trader Decision Engine. `DecisionPlanRecord.payload` holds the
+# full current DecisionPlan (state + all four condition lists); the plan row
+# IS updated as the plan progresses (unlike the append-only tables below) --
+# but only ever via state_machine.apply_transition's forward-only state
+# changes, never a retroactive edit of an existing condition/threshold.
+# DecisionTransitionRecord/ConditionEvaluationRecord/EvidenceDiffSnapshot
+# Record are strictly append-only (no update method exists on the
+# repository for any of the three) -- the full lifecycle stays auditable.
+# ---------------------------------------------------------------------------
+
+
+class DecisionPlanRecord(Base):
+    __tablename__ = "decision_plans"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    decision_plan_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    timeframe: Mapped[str] = mapped_column(String(8), index=True)
+    setup_id: Mapped[str] = mapped_column(String(64), index=True)
+    setup_type: Mapped[str] = mapped_column(String(64), index=True)
+    direction: Mapped[str] = mapped_column(String(16), index=True)
+    state: Mapped[str] = mapped_column(String(32), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    row_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class DecisionTransitionRecord(Base):
+    __tablename__ = "decision_transitions"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    transition_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    decision_plan_id: Mapped[str] = mapped_column(String(64), index=True)
+    from_state: Mapped[Optional[str]] = mapped_column(String(32))
+    to_state: Mapped[str] = mapped_column(String(32), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ConditionEvaluationRecord(Base):
+    __tablename__ = "decision_condition_evaluations"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    decision_plan_id: Mapped[str] = mapped_column(String(64), index=True)
+    condition_id: Mapped[str] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), index=True)
+    evaluated_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvidenceDiffSnapshotRecord(Base):
+    __tablename__ = "decision_evidence_diff_snapshots"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    snapshot_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    decision_plan_id: Mapped[str] = mapped_column(String(64), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    classification: Mapped[str] = mapped_column(String(16), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

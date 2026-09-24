@@ -26,11 +26,12 @@ vi.mock("@/hooks/useStreamingActive", () => ({
 
 vi.mock("@/components/CandlestickChart", () => ({
   CandlestickChart: () => <div data-testid="chart-stub" />,
-  DEFAULT_CHART_DISPLAY_OPTIONS: { structure: true, supportResistance: true, setups: true, allPivots: false },
+  DEFAULT_CHART_DISPLAY_OPTIONS: { structure: true, supportResistance: true, setups: true, allPivots: false, decisions: true },
 }));
 vi.mock("@/components/ChartLegend", () => ({ ChartLegend: () => null }));
 vi.mock("@/components/FeaturePanel", () => ({ FeaturePanel: () => null }));
 vi.mock("@/components/SetupInspectorPanel", () => ({ SetupInspectorPanel: () => null }));
+vi.mock("@/components/DecisionMonitorPanel", () => ({ DecisionMonitorPanel: () => null }));
 vi.mock("@/components/StructurePanel", () => ({ StructurePanel: () => null }));
 vi.mock("@/components/SupportResistancePanel", () => ({ SupportResistancePanel: () => null }));
 vi.mock("@/components/LiveQuoteHeader", () => ({ LiveQuoteHeader: () => null }));
@@ -67,6 +68,7 @@ describe("MarketWorkspace <-> sidebar Watchlist wiring (regression)", () => {
     vi.spyOn(api, "getLevels").mockRejectedValue(new Error("not needed for this test"));
     vi.spyOn(api, "getSetups").mockRejectedValue(new Error("not needed for this test"));
     vi.spyOn(api, "getSymbolCatalysts").mockRejectedValue(new Error("not needed for this test"));
+    vi.spyOn(api, "scanDecisions").mockRejectedValue(new Error("not needed for this test"));
   });
 
   it("clicking NVDA in the sidebar watchlist calls router.push with ?symbol=NVDA", async () => {

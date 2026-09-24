@@ -33,6 +33,10 @@ EXPECTED_TABLES = {
     "forecast_outcomes",
     "forward_validation_gate_versions",
     "forward_validation_gate_results",
+    "decision_plans",
+    "decision_transitions",
+    "decision_condition_evaluations",
+    "decision_evidence_diff_snapshots",
 }
 
 
