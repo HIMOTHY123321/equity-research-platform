@@ -4,6 +4,9 @@ of caching concerns so it stays simple to test in isolation.
 
 from __future__ import annotations
 
+from datetime import datetime
+from typing import Optional
+
 from app.market_data.cache import Cache
 from app.market_data.capabilities import ProviderCapabilities
 from app.market_data.provider import MarketDataProvider
@@ -32,12 +35,23 @@ class CachedMarketDataProvider(MarketDataProvider):
     def capabilities(self) -> ProviderCapabilities:
         return self._inner.capabilities()
 
-    def get_candles(self, symbol: str, timeframe: Timeframe, limit: int = 200) -> list[Candle]:
-        key = f"candles:{symbol}:{timeframe.value}:{limit}"
+    def get_candles(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        limit: int = 200,
+        before: Optional[datetime] = None,
+    ) -> list[Candle]:
+        # (FINAL TERMINAL POLISH PASS #1: lazy pan-left pagination) `before`
+        # is part of the cache key -- an older-history page and the base
+        # "most recent" page for the same symbol/timeframe/limit are
+        # different requests and must never collide in the cache.
+        cursor_key = before.isoformat() if before is not None else "latest"
+        key = f"candles:{symbol}:{timeframe.value}:{limit}:{cursor_key}"
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        candles = self._inner.get_candles(symbol, timeframe, limit)
+        candles = self._inner.get_candles(symbol, timeframe, limit, before=before)
         self._cache.set(key, candles, self._candles_ttl)
         return candles
 

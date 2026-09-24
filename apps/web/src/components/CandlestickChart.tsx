@@ -171,6 +171,18 @@ export function CandlestickChart({
   // next set to detect a pure older-history prepend (see the `candles`
   // effect below) vs. a fresh symbol/timeframe/range load.
   const prevSortedCandlesRef = useRef<Candle[]>([]);
+  // (FINAL TERMINAL POLISH PASS #1 hardening) lightweight-charts fires
+  // subscribeVisibleLogicalRangeChange for ANY range change, including ones
+  // *we* just caused via setData()/fitContent()/setVisibleLogicalRange() in
+  // the candles effect below -- without this guard, a narrow initial load
+  // (fitContent showing all of a small base page, `from` near 0) or even
+  // our own post-prepend shift call would immediately re-trigger
+  // onNeedOlderHistory, cascading into a runaway auto-fetch loop that was
+  // never a real user pan and visibly snapped the viewport out to the
+  // full accumulated range. Set true immediately before any programmatic
+  // range mutation; the handler consumes-and-clears it on the very next
+  // invocation instead of treating it as a genuine user gesture.
+  const suppressNextRangeChangeRef = useRef(false);
   // The newest UTCTimestamp actually committed to the series -- reset every
   // time `candles` is reloaded (new symbol/timeframe, or a refetch that
   // advanced the authoritative newest bar), read by the liveCandle effect
@@ -243,6 +255,10 @@ export function CandlestickChart({
     // re-subscribed on every render -- always calls the *latest* callback
     // via the ref, never a stale closure over the prop from mount time.
     const handleVisibleLogicalRangeChange = (range: LogicalRange | null) => {
+      if (suppressNextRangeChangeRef.current) {
+        suppressNextRangeChangeRef.current = false;
+        return;
+      }
       if (!range) return;
       if (range.from <= OLDER_HISTORY_TRIGGER_THRESHOLD_BARS) {
         onNeedOlderHistoryRef.current?.();
@@ -297,11 +313,17 @@ export function CandlestickChart({
     if (preservedRange) {
       // Every already-displayed bar's logical index shifted right by
       // exactly `prependCount` -- shifting the saved range by the same
-      // amount keeps the same candles in view, no visual jump.
+      // amount keeps the same candles in view, no visual jump. This is a
+      // programmatic range change, never a real pan -- must not re-trigger
+      // the older-history fetch.
+      suppressNextRangeChangeRef.current = true;
       chart?.timeScale().setVisibleLogicalRange(shiftLogicalRange(preservedRange, prependCount));
     } else {
       // Fresh symbol/timeframe/range load (not a prepend) -- fitting the
-      // whole series is the correct, existing behavior here.
+      // whole series is the correct, existing behavior here. Also
+      // programmatic: a narrow initial page legitimately fits with `from`
+      // near 0, which must not itself be read as "user panned to the edge."
+      suppressNextRangeChangeRef.current = true;
       chart?.timeScale().fitContent();
     }
 

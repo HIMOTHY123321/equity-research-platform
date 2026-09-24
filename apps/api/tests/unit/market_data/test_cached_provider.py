@@ -11,8 +11,9 @@ class CountingProvider(MarketDataProvider):
         self.quote_calls = 0
         self.previous_close_calls = 0
 
-    def get_candles(self, symbol, timeframe, limit=200):
+    def get_candles(self, symbol, timeframe, limit=200, before=None):
         self.candle_calls += 1
+        self.last_before = before
         return [make_candle(symbol=symbol, timeframe=timeframe)]
 
     def get_latest_quote(self, symbol):
@@ -73,6 +74,51 @@ def test_quote_and_candles_use_independent_cache_entries():
 
     assert inner.candle_calls == 1
     assert inner.quote_calls == 1
+
+
+def test_before_cursor_is_accepted_and_forwarded_to_inner_provider():
+    # Regression: CachedMarketDataProvider.get_candles previously had no
+    # `before` parameter at all -- every call from the route (which always
+    # passes `before=` as a keyword, even when None) raised TypeError.
+    inner = CountingProvider()
+    provider = CachedMarketDataProvider(inner, InMemoryCache())
+    cursor = utc(2026, 1, 1, 0, 0)
+
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=cursor)
+
+    assert inner.candle_calls == 1
+    assert inner.last_before == cursor
+
+
+def test_before_cursor_pages_are_cached_independently_of_the_base_page():
+    inner = CountingProvider()
+    provider = CachedMarketDataProvider(inner, InMemoryCache())
+
+    provider.get_candles("AAPL", Timeframe.ONE_DAY)
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=utc(2026, 1, 1, 0, 0))
+
+    assert inner.candle_calls == 2
+
+
+def test_different_before_cursors_are_cached_independently():
+    inner = CountingProvider()
+    provider = CachedMarketDataProvider(inner, InMemoryCache())
+
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=utc(2026, 1, 1, 0, 0))
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=utc(2025, 1, 1, 0, 0))
+
+    assert inner.candle_calls == 2
+
+
+def test_repeated_calls_with_the_same_before_cursor_are_cached():
+    inner = CountingProvider()
+    provider = CachedMarketDataProvider(inner, InMemoryCache())
+    cursor = utc(2026, 1, 1, 0, 0)
+
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=cursor)
+    provider.get_candles("AAPL", Timeframe.ONE_DAY, before=cursor)
+
+    assert inner.candle_calls == 1
 
 
 def test_cache_expiry_triggers_fresh_fetch():
