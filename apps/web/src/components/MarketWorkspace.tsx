@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { CandlestickChart, DEFAULT_CHART_DISPLAY_OPTIONS, type ChartDisplayOptions } from "@/components/CandlestickChart";
 import { ChartLegend } from "@/components/ChartLegend";
@@ -41,31 +41,79 @@ import type { Timeframe } from "@/lib/types";
  * fetches anything itself, and structure/levels are each requested only
  * once even though both a panel AND the chart use them.
  */
+/**
+ * Phase 13.1 hardening: `useSearchParams()` requires a Suspense boundary
+ * (Next.js bails a Client Component tree to client-only rendering up to the
+ * nearest Suspense ancestor wherever it's called -- see
+ * node_modules/next/dist/docs/.../use-search-params.md). Wrapping the
+ * ENTIRE heavy MarketWorkspaceInner tree in that boundary (the original
+ * shape here) meant the whole workspace's first paint depended on that one
+ * boundary's client-side Suspense hydration completing -- and confirmed via
+ * a `console.log` at the very top of MarketWorkspaceInner never firing on a
+ * cold load, that hydration was being scheduled at low enough priority to
+ * never actually run without a discrete user-input event forcing a
+ * synchronous flush (React's selective-hydration lanes; see
+ * node_modules/next/dist/docs/01-app/02-guides/streaming.md). No console
+ * error, no failed request -- the render function was simply never called.
+ *
+ * Fix: isolate `useSearchParams()` to the smallest possible leaf
+ * (`SymbolUrlWatcher`, which renders nothing) and wrap ONLY that leaf in
+ * Suspense -- exactly the shape Next's own docs use in their example
+ * (`SearchBar` alone, never the whole page). `MarketWorkspaceInner` itself
+ * no longer calls `useSearchParams()` at all, so it is never gated behind a
+ * Suspense boundary and renders synchronously on the very first paint using
+ * the server-computed `defaultSymbol` prop; `SymbolUrlWatcher` syncs in the
+ * real URL value shortly after (typically the same tick), same as before.
+ */
+function SymbolUrlWatcher({ onChange }: { onChange: (symbol: string | null) => void }) {
+  const searchParams = useSearchParams();
+  const symbol = searchParams.get("symbol");
+  useEffect(() => {
+    onChange(symbol);
+  }, [symbol, onChange]);
+  return null;
+}
+
 export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
+  const [urlSymbol, setUrlSymbol] = useState<string | null>(null);
   return (
-    <Suspense fallback={null}>
-      <MarketWorkspaceInner defaultSymbol={defaultSymbol} />
-    </Suspense>
+    <>
+      <Suspense fallback={null}>
+        <SymbolUrlWatcher onChange={setUrlSymbol} />
+      </Suspense>
+      <MarketWorkspaceInner defaultSymbol={defaultSymbol} urlSymbol={urlSymbol} />
+    </>
   );
 }
 
-function MarketWorkspaceInner({ defaultSymbol }: { defaultSymbol: string }) {
+function MarketWorkspaceInner({
+  defaultSymbol,
+  urlSymbol,
+}: {
+  defaultSymbol: string;
+  urlSymbol: string | null;
+}) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   // (#5/#9) Derived from the URL (server-set on first load via `defaultSymbol`,
   // client-navigated thereafter) so a symbol change here is a real history
   // entry -- back/forward and cross-page persistence both just work, no
-  // local state to fall out of sync with it.
-  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || defaultSymbol;
+  // local state to fall out of sync with it. `urlSymbol` arrives slightly
+  // after first paint via SymbolUrlWatcher above; `defaultSymbol` covers
+  // the instant before it does.
+  const symbol = urlSymbol?.toUpperCase().trim() || defaultSymbol;
   const setSymbol = useCallback(
     (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      // Read the live URL at call time (an event-handler-only read, never
+      // during render/SSR) instead of depending on useSearchParams() here,
+      // which is exactly the dependency this component was restructured to
+      // avoid -- see the module-level comment above SymbolUrlWatcher.
+      const params = new URLSearchParams(window.location.search);
       params.set("symbol", next);
       // push (not replace): each symbol change is a distinct back-stack
       // entry -- "SPY -> NVDA -> AAPL -> Back = NVDA -> Back = SPY".
       router.push(`?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams],
+    [router],
   );
   const [timeframe, setTimeframe] = useState<Timeframe>("1d");
   const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);

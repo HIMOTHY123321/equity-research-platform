@@ -90,4 +90,22 @@ describe("MarketWorkspace <-> sidebar Watchlist wiring (regression)", () => {
     render(<MarketWorkspace defaultSymbol="SPY" />);
     await waitFor(() => expect(screen.getByRole("heading", { name: "NVDA" })).toBeInTheDocument());
   });
+
+  // Phase 13.1 regression: the workspace's real content used to be gated
+  // entirely behind a Suspense boundary around useSearchParams() (see the
+  // architecture comment above SymbolUrlWatcher in MarketWorkspace.tsx) --
+  // a cold load in a real browser never called MarketWorkspaceInner's
+  // render function at all until a user interaction forced a flush, with
+  // no console error or failed request to reveal why. useSearchParams() is
+  // now isolated to a tiny leaf (SymbolUrlWatcher) so the heavy tree
+  // (MarketWorkspaceInner) is never itself wrapped in that Suspense
+  // boundary and paints synchronously using `defaultSymbol`. This asserts
+  // that synchronous first paint directly, without `waitFor` -- if
+  // MarketWorkspaceInner ever again depended on an async/Suspense-gated
+  // value to render its heading at all, this would fail immediately.
+  it("paints real content synchronously on mount using defaultSymbol, before any URL sync", () => {
+    currentSearch = ""; // no ?symbol= present -- forces reliance on defaultSymbol alone
+    render(<MarketWorkspace defaultSymbol="AAPL" />);
+    expect(screen.getByRole("heading", { name: "AAPL" })).toBeInTheDocument();
+  });
 });

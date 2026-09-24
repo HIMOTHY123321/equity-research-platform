@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { CandlestickChart } from "@/components/CandlestickChart";
 import { SymbolSearch } from "@/components/SymbolSearch";
@@ -76,32 +76,54 @@ function BreakdownTable({ title, rows }: { title: string; rows: ForecastPerforma
   );
 }
 
+// Phase 13.1 hardening: isolate useSearchParams() to this tiny, render-
+// nothing leaf instead of gating the entire (heavy) page behind its
+// Suspense boundary -- see the matching comment in MarketWorkspace.tsx for
+// the full root-cause writeup (a cold load never called the page's render
+// function at all until a user interaction forced React to flush the
+// low-priority Suspense-hydration lane; no console error, no failed
+// request).
+function SymbolUrlWatcher({ onChange }: { onChange: (symbol: string | null) => void }) {
+  const searchParams = useSearchParams();
+  const symbol = searchParams.get("symbol");
+  useEffect(() => {
+    onChange(symbol);
+  }, [symbol, onChange]);
+  return null;
+}
+
 export default function ForecastLabPage() {
+  const [urlSymbol, setUrlSymbol] = useState<string | null>(null);
   return (
-    <Suspense fallback={null}>
-      <ForecastLabPageInner />
-    </Suspense>
+    <>
+      <Suspense fallback={null}>
+        <SymbolUrlWatcher onChange={setUrlSymbol} />
+      </Suspense>
+      <ForecastLabPageInner urlSymbol={urlSymbol} />
+    </>
   );
 }
 
-function ForecastLabPageInner() {
+function ForecastLabPageInner({ urlSymbol }: { urlSymbol: string | null }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   // (#9) A symbol selected on Overview (`/?symbol=NVDA`) must persist here
-  // rather than always resetting to a hardcoded default -- derived directly
-  // from the URL (the single source of truth) so browser back/forward and
-  // cross-page navigation both just work, no local state to fall out of
-  // sync with it.
-  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || "SPY";
+  // rather than always resetting to a hardcoded default -- derived from the
+  // URL (via SymbolUrlWatcher above, the single source of truth) so browser
+  // back/forward and cross-page navigation both just work, no local state
+  // to fall out of sync with it.
+  const symbol = urlSymbol?.toUpperCase().trim() || "SPY";
 
   const setSymbol = useCallback(
     (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      // Read the live URL at call time -- an event-handler-only read, never
+      // during render/SSR -- instead of depending on useSearchParams() in
+      // this (heavy) component; see SymbolUrlWatcher above.
+      const params = new URLSearchParams(window.location.search);
       params.set("symbol", next);
       // push (not replace): each symbol change is its own back-stack entry.
       router.push(`?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams],
+    [router],
   );
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [forecastCategory, setForecastCategory] = useState<ForecastCategoryKind>("structure");

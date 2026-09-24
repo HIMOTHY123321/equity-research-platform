@@ -160,3 +160,85 @@ def test_get_decision_explanations_returns_why_now_and_why_not_yet(client):
     assert "why_not_yet" in body
     assert "what_would_change_state" in body
     assert isinstance(body["what_would_change_state"], list)
+
+
+# ---------------------------------------------------------------------------
+# Phase 13.1: deterministic fixture replay through the real API surface --
+# the same Decision Monitor UI that displays live SPY plans can display
+# these, with zero new frontend code, since they're persisted through the
+# exact same repository/routes.
+# ---------------------------------------------------------------------------
+
+
+def test_replay_unknown_fixture_scenario_returns_404(client):
+    response = client.post("/api/decisions/_dev/fixtures/not-a-real-scenario/replay")
+    assert response.status_code == 404
+
+
+def test_fixture_replay_route_is_unreachable_outside_development(client, monkeypatch):
+    # Dev-only lifecycle fixtures must never be reachable -- and therefore
+    # never able to write a ZFXA/ZFXB/ZFXC plan into the database -- in a
+    # production deployment. 404 (not 403): the route doesn't even
+    # acknowledge it exists outside development.
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        "app.api.routes.decisions.get_settings", lambda: Settings(environment="production")
+    )
+
+    response = client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
+
+    assert response.status_code == 404
+    # And no plan was ever created as a side effect of the attempt.
+    listing = client.get("/api/decisions", params={"symbol": "ZFXA"})
+    assert listing.json() == []
+
+
+def test_replay_strengthen_invalidate_fixture_reaches_invalidated(client):
+    response = client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
+
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["symbol"] == "ZFXA"
+    assert plan["state"] == "invalidated"
+
+    transitions_resp = client.get(f"/api/decisions/{plan['decision_plan_id']}/transitions")
+    assert transitions_resp.status_code == 200
+    to_states = [t["to_state"] for t in transitions_resp.json()]
+    assert to_states == [
+        "evaluating",
+        "watching",
+        "entry_conditions_met",
+        "active_thesis",
+        "thesis_strengthening",
+        "invalidated",
+    ]
+
+
+def test_replay_exit_fixture_reaches_exit_conditions_met(client):
+    response = client.post("/api/decisions/_dev/fixtures/exit/replay")
+
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["symbol"] == "ZFXB"
+    assert plan["state"] == "exit_conditions_met"
+
+
+def test_replay_expire_fixture_reaches_expired(client):
+    response = client.post("/api/decisions/_dev/fixtures/expire/replay")
+
+    assert response.status_code == 200
+    plan = response.json()
+    assert plan["symbol"] == "ZFXC"
+    assert plan["state"] == "expired"
+
+
+def test_fixture_plans_appear_through_the_same_list_endpoint_the_ui_uses(client):
+    client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
+
+    response = client.get("/api/decisions", params={"symbol": "ZFXA"})
+
+    assert response.status_code == 200
+    plans = response.json()
+    assert len(plans) == 1
+    assert plans[0]["state"] == "invalidated"

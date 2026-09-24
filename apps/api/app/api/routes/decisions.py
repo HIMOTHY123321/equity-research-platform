@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.ai_analysis.market_snapshot import build_market_snapshot
 from app.api.deps import get_market_data_provider
 from app.api.routes.market import _validated_symbol, _validated_timeframe
+from app.config import get_settings
 from app.database.session import get_db
 from app.decision_engine.ai_brief import (
     DecisionEvidencePacket,
@@ -30,6 +31,7 @@ from app.decision_engine.ai_brief import (
     why_not_yet,
     why_now,
 )
+from app.decision_engine.fixtures import FIXTURE_SCENARIOS, run_fixture_scenario
 from app.decision_engine.plan_builder import build_decision_plan
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
 from app.decision_engine.schemas import TERMINAL_STATES, DecisionPlan, DecisionTransition
@@ -48,6 +50,35 @@ def _get_plan_or_404(decision_plan_id: str, repository: DecisionEngineRepository
     if plan is None:
         raise HTTPException(status_code=404, detail=f"DecisionPlan {decision_plan_id!r} not found")
     return plan
+
+
+@router.post("/_dev/fixtures/{scenario}/replay", response_model=DecisionPlan)
+def replay_fixture_scenario(
+    scenario: str, repository: DecisionEngineRepository = Depends(_decision_repository)
+) -> DecisionPlan:
+    """Dev/QA-only: drives one of the deterministic Phase 13.1 lifecycle
+    fixtures (app.decision_engine.fixtures) through the REAL, unmodified
+    evaluate_plan and persists every step, so the existing Decision Monitor
+    UI can display the full WATCHING/ACTIVE_THESIS/STRENGTHENING/WEAKENING/
+    INVALIDATED/EXIT_CONDITIONS_MET/EXPIRED lifecycle on demand -- without
+    waiting for real market data to happen to produce every state, and
+    without any engine or UI code changing to support it. Fixture symbols
+    (ZFXA/ZFXB/ZFXC) can never collide with a real ticker. Declared before
+    `/{decision_plan_id}` so it is never shadowed by that path.
+
+    Gated on `settings.environment == "development"` (404, not 403 -- the
+    route doesn't even acknowledge it exists outside dev) so this can never
+    be reached in a production deployment and no fixture data can ever enter
+    a production database."""
+    if get_settings().environment != "development":
+        raise HTTPException(status_code=404, detail="Not Found")
+    if scenario not in FIXTURE_SCENARIOS:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown fixture scenario {scenario!r}. Known: {sorted(FIXTURE_SCENARIOS)}",
+        )
+    history = run_fixture_scenario(scenario, repository)
+    return history[-1]
 
 
 @router.post("/{symbol}/scan", response_model=list[DecisionPlan])

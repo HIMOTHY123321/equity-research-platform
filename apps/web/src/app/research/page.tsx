@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useCallback, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 
 import { CatalystResearchPanel } from "@/components/research/CatalystResearchPanel";
 import { HistoricalAnalogsPanel } from "@/components/research/HistoricalAnalogsPanel";
@@ -40,31 +40,53 @@ function isoDaysAgo(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Phase 13.1 hardening: isolate useSearchParams() to this tiny, render-
+// nothing leaf instead of gating the entire (heavy) page behind its
+// Suspense boundary -- see the matching comment in MarketWorkspace.tsx for
+// the full root-cause writeup (a cold load never called the page's render
+// function at all until a user interaction forced React to flush the
+// low-priority Suspense-hydration lane; no console error, no failed
+// request).
+function SymbolUrlWatcher({ onChange }: { onChange: (symbol: string | null) => void }) {
+  const searchParams = useSearchParams();
+  const symbol = searchParams.get("symbol");
+  useEffect(() => {
+    onChange(symbol);
+  }, [symbol, onChange]);
+  return null;
+}
+
 export default function ResearchLabPage() {
+  const [urlSymbol, setUrlSymbol] = useState<string | null>(null);
   return (
-    <Suspense fallback={null}>
-      <ResearchLabPageInner />
-    </Suspense>
+    <>
+      <Suspense fallback={null}>
+        <SymbolUrlWatcher onChange={setUrlSymbol} />
+      </Suspense>
+      <ResearchLabPageInner urlSymbol={urlSymbol} />
+    </>
   );
 }
 
-function ResearchLabPageInner() {
+function ResearchLabPageInner({ urlSymbol }: { urlSymbol: string | null }) {
   const router = useRouter();
-  const searchParams = useSearchParams();
   // ---- Single-symbol replay (existing, unchanged) --------------------------
   // (#9) Same URL-query-state persistence convention as Forecast Lab/
-  // Overview -- derived directly from the URL, no local state to fall out
-  // of sync with it.
-  const symbol = searchParams.get("symbol")?.toUpperCase().trim() || "SPY";
+  // Overview -- derived from the URL (via SymbolUrlWatcher above), no local
+  // state to fall out of sync with it.
+  const symbol = urlSymbol?.toUpperCase().trim() || "SPY";
 
   const setSymbol = useCallback(
     (next: string) => {
-      const params = new URLSearchParams(searchParams.toString());
+      // Read the live URL at call time -- an event-handler-only read, never
+      // during render/SSR -- instead of depending on useSearchParams() in
+      // this (heavy) component; see SymbolUrlWatcher above.
+      const params = new URLSearchParams(window.location.search);
       params.set("symbol", next);
       // push (not replace): each symbol change is its own back-stack entry.
       router.push(`?${params.toString()}`, { scroll: false });
     },
-    [router, searchParams],
+    [router],
   );
   const [timeframe, setTimeframe] = useState<Timeframe>("1h");
   const [start, setStart] = useState(isoDaysAgo(30));
