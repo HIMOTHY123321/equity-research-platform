@@ -1617,6 +1617,16 @@ export type LiveServerFrame =
   | { type: "snapshot_refreshed"; symbol: string; timeframe: string; refreshed_at: string }
   | { type: "forecast_resolved"; forecast_id: string; symbol: string; outcome: ForecastOutcome }
   | { type: "catalyst_event"; symbol: string; new_article_count: number; detected_at: string }
+  | { type: "alert_event"; symbol: string; alert: AlertEvent }
+  | {
+      type: "decision_state_change";
+      symbol: string;
+      decision_plan_id: string;
+      from_state: DecisionStateKind | null;
+      to_state: DecisionStateKind;
+      occurred_at: string;
+    }
+  | { type: "monitor_status"; symbol: string; status: "ok" | "error"; detail: string; at: string }
   | { type: "heartbeat" }
   | { type: "error"; detail: string };
 
@@ -1810,4 +1820,109 @@ export interface DecisionExplanations {
   why_not_yet: string;
   what_would_change_state: string[];
   is_terminal: boolean;
+}
+
+// ---- Alerts, Monitoring & Decision Scanner (Phase 14) ---------------------
+//
+// An AlertEvent is a deterministic record of ONE meaningful change already
+// produced by the Decision Engine -- never a prediction, never a score.
+// `severity` answers "how urgently should I look," never "how likely is
+// this to win." `origin` marks whether an alert is genuine monitoring
+// history (`live_prospective`) or dev-only (`dev_fixture`/
+// `historical_replay`) -- the Alert Center and Forward Validation counts
+// both filter on it.
+
+export type AlertTypeKind =
+  | "plan_created"
+  | "watching"
+  | "entry_conditions_met"
+  | "thesis_activated"
+  | "thesis_strengthening"
+  | "thesis_weakening"
+  | "invalidated"
+  | "exit_conditions_met"
+  | "expired"
+  | "condition_passed"
+  | "condition_failed"
+  | "conflict_added"
+  | "conflict_removed"
+  | "catalyst_update"
+  | "data_stale"
+  | "data_recovered"
+  | "stream_disconnected"
+  | "stream_reconnected";
+
+export type AlertSeverityKind = "info" | "notice" | "important" | "critical";
+
+export type AlertOriginKind = "live_prospective" | "dev_fixture" | "historical_replay";
+
+export interface AlertEvent {
+  alert_id: string;
+  symbol: string;
+  decision_plan_id: string | null;
+  setup_id: string | null;
+
+  alert_type: AlertTypeKind;
+  severity: AlertSeverityKind;
+  title: string;
+  summary: string;
+
+  previous_state: string | null;
+  current_state: string | null;
+
+  occurred_at: string;
+  source_timestamp: string | null;
+  evaluated_at: string;
+
+  trigger_condition_ids: string[];
+  evidence_refs: string[];
+  transition_id: string | null;
+
+  timeframe: string | null;
+  setup_type: string | null;
+  direction: string | null;
+
+  research_status: string[];
+  ranking_gate_status: string;
+  forward_validation_gate_status: string | null;
+
+  provider: string | null;
+  data_freshness_state: string | null;
+
+  dedup_key: string;
+  origin: AlertOriginKind;
+  schema_version: string;
+  pipeline_version: string;
+
+  created_at: string;
+}
+
+export interface AlertPreference {
+  alert_type: AlertTypeKind;
+  enabled: boolean;
+}
+
+export interface MonitoringSubscription {
+  symbol: string;
+  enabled: boolean;
+  preferred_timeframes: string[];
+  decision_monitoring_enabled: boolean;
+  added_at: string;
+}
+
+// The cross-symbol Decision Scanner (§9/§36): NOT a ranking -- one row per
+// monitored symbol, urgency-sorted by the same severity table alerts use.
+// `state: null` means no DecisionPlan exists for this symbol at all, distinct
+// from `"abstain"` (a setup was found and explicitly abstained on).
+export interface ScannerRow {
+  symbol: string;
+  decision_plan_id: string | null;
+  state: DecisionStateKind | null;
+  setup_type: string | null;
+  timeframe: string | null;
+  direction: string | null;
+  research_status: string[];
+  ranking_gate_status: string;
+  last_change_at: string | null;
+  other_monitored_plan_count: number;
 }

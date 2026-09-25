@@ -1,0 +1,206 @@
+"""The background monitor (§11): the thing that finally starts the Decision
+Engine across a whole configurable universe of symbols instead of only ever
+reacting to a manual `/scan` click on whatever symbol happens to be open.
+
+`scan_once` is the directly-testable synchronous core (same shape as
+ForecastMonitor.scan_and_resolve_once / DecisionEngineService.evaluate_open_
+plans_for): one pass over every enabled MonitoringUniverse symbol, calling
+the SAME `run_symbol_scan` the manual `/scan` route uses (§6 -- zero
+Decision Engine logic lives here, this module only detects and reacts),
+turning every resulting DecisionTransition into an AlertEvent via
+AlertService, and broadcasting DecisionStateChangeEvent for every
+transition (alert-worthy or not, e.g. ABSTAIN) plus MonitorStatusEvent for
+symbol-level failures (§45 failure isolation -- one bad symbol never stops
+the rest).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Callable, Optional
+
+from sqlalchemy.orm import Session
+
+from app.alerts.repository import SqlAlchemyAlertRepository
+from app.alerts.schemas import AlertOrigin
+from app.alerts.service import AlertEventBus, AlertService
+from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
+from app.decision_engine.schemas import DecisionTransition
+from app.decision_engine.service import run_symbol_scan
+from app.live.config import DEFAULT_LIVE_CONFIG, LiveConfig
+from app.market_data.provider import MarketDataProvider
+from app.monitoring.universe import MonitoringUniverse
+from app.schemas.market_data import Timeframe
+from app.watchlist.repository import WatchlistRepository
+
+logger = logging.getLogger(__name__)
+
+# Symbols in the monitoring universe are scanned on whatever timeframes
+# they've configured, defaulting to this when none is set -- matches the
+# Decision Monitor UI's own default (`?timeframe=1h` in the manual scan
+# route) so a freshly-monitored symbol without preferences behaves exactly
+# like clicking "scan" on it manually would have.
+_DEFAULT_TIMEFRAMES = (Timeframe.ONE_HOUR,)
+
+
+@dataclass(frozen=True)
+class DecisionStateChangeEvent:
+    """Broadcast for every DecisionTransition the monitor observes,
+    independent of whether it produced an AlertEvent (e.g. ABSTAIN) --
+    lets a connected UI reflect state immediately without waiting on the
+    (preference-gated) alert stream."""
+
+    decision_plan_id: str
+    symbol: str
+    from_state: Optional[str]
+    to_state: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True)
+class MonitorStatusEvent:
+    symbol: str
+    status: str  # "ok" | "error"
+    detail: str
+    at: datetime
+
+
+class MonitoringService:
+    """Owns no long-lived Session -- same "fresh session per pass, closed
+    when the pass ends" convention as ForecastMonitor/NewsMonitor (a
+    Session held open for the lifetime of a background asyncio task would
+    drift from what other request-scoped sessions have since committed).
+    `event_bus` is the one thing that DOES persist across passes: it is
+    handed to a freshly-constructed AlertService every scan, so a WebSocket
+    connection's listener queue (registered once, at connect time) keeps
+    receiving alerts no matter which pass emitted them."""
+
+    def __init__(
+        self,
+        session_factory: Callable[[], Session],
+        watchlist_repository: WatchlistRepository,
+        market_provider: MarketDataProvider,
+        event_bus: Optional[AlertEventBus] = None,
+        config: LiveConfig = DEFAULT_LIVE_CONFIG,
+        now_fn=lambda: datetime.now(timezone.utc),
+    ) -> None:
+        self._session_factory = session_factory
+        self._watchlist_repository = watchlist_repository
+        self._market_provider = market_provider
+        self.event_bus = event_bus or AlertEventBus()
+        self._config = config
+        self._now = now_fn
+        self._task: Optional[asyncio.Task] = None
+        self._listeners: list[
+            "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]"
+        ] = []
+
+    def add_listener(self) -> "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]":
+        queue: "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]" = asyncio.Queue()
+        self._listeners.append(queue)
+        return queue
+
+    def remove_listener(
+        self, queue: "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]"
+    ) -> None:
+        if queue in self._listeners:
+            self._listeners.remove(queue)
+
+    def _emit(self, event) -> None:
+        for queue in list(self._listeners):
+            queue.put_nowait(event)
+
+    def scan_symbol_once(
+        self,
+        symbol: str,
+        timeframe: Timeframe,
+        as_of: datetime,
+        decision_repository: DecisionEngineRepository,
+        alert_service: AlertService,
+    ) -> list[DecisionTransition]:
+        """One symbol/timeframe pass: scan, then turn every resulting
+        transition into a DecisionStateChangeEvent broadcast plus (when
+        alert-worthy) an AlertEvent. A provider failure on this symbol is
+        caught and reported via MonitorStatusEvent -- it never propagates
+        and never stops the caller's loop over the rest of the universe
+        (§45)."""
+        try:
+            result = run_symbol_scan(symbol, timeframe, self._market_provider, decision_repository, as_of)
+        except Exception as exc:  # noqa: BLE001 -- deliberate: one bad symbol must not stop the rest
+            logger.exception("Monitoring scan failed for %s", symbol)
+            self._emit(MonitorStatusEvent(symbol=symbol, status="error", detail=str(exc), at=self._now()))
+            return []
+
+        self._emit(MonitorStatusEvent(symbol=symbol, status="ok", detail="scan completed", at=self._now()))
+
+        plan_by_id = {p.decision_plan_id: p for p in result.plans}
+        all_transitions = [
+            *(t for plan in result.new_plans for t in plan.transitions),
+            *result.transitions,
+        ]
+        for transition in all_transitions:
+            self._emit(
+                DecisionStateChangeEvent(
+                    decision_plan_id=transition.decision_plan_id,
+                    symbol=symbol,
+                    from_state=transition.from_state.value if transition.from_state else None,
+                    to_state=transition.to_state.value,
+                    occurred_at=transition.occurred_at,
+                )
+            )
+            plan = plan_by_id.get(transition.decision_plan_id)
+            if plan is not None:
+                alert_service.emit_transition_alert(plan, transition, origin=AlertOrigin.LIVE_PROSPECTIVE)
+
+        return all_transitions
+
+    def scan_once(self) -> list[DecisionTransition]:
+        """One full pass over the whole enabled monitoring universe (§8/§9).
+        Symbol failure isolation applies per-symbol inside
+        scan_symbol_once; this loop itself never stops early. Opens exactly
+        one Session for the whole pass, closed when the pass ends."""
+        as_of = self._now()
+        session = self._session_factory()
+        try:
+            alert_repository = SqlAlchemyAlertRepository(session)
+            decision_repository = SqlAlchemyDecisionEngineRepository(session)
+            universe = MonitoringUniverse(alert_repository, self._watchlist_repository)
+            alert_service = AlertService(alert_repository, event_bus=self.event_bus)
+
+            transitions: list[DecisionTransition] = []
+            for symbol in universe.list_enabled_symbols():
+                for timeframe in _DEFAULT_TIMEFRAMES:
+                    transitions.extend(
+                        self.scan_symbol_once(symbol, timeframe, as_of, decision_repository, alert_service)
+                    )
+            return transitions
+        finally:
+            session.close()
+
+    # ------------------------------------------------------------- lifecycle
+
+    async def start(self) -> None:
+        self._task = asyncio.create_task(self._run())
+
+    async def stop(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+            self._task = None
+
+    async def _run(self) -> None:
+        try:
+            while True:
+                try:
+                    await asyncio.to_thread(self.scan_once)
+                except Exception:
+                    logger.exception("Monitoring service scan pass failed")
+                await asyncio.sleep(self._config.forecast_monitor_interval_seconds)
+        except asyncio.CancelledError:
+            return

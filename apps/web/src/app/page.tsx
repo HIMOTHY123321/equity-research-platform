@@ -1,4 +1,5 @@
 import { MarketWorkspace } from "@/components/MarketWorkspace";
+import { OverviewAlertStrip } from "@/components/OverviewAlertStrip";
 import { TopNav } from "@/components/TopNav";
 import { checkApiHealth } from "@/lib/api";
 
@@ -28,6 +29,8 @@ export default async function Home({
             API: {health?.status === "ok" ? `connected (${health.environment})` : "unreachable"}
           </div>
         </div>
+
+        <OverviewAlertStrip />
 
         <MarketWorkspace defaultSymbol={defaultSymbol} />
       </main>

@@ -822,3 +822,67 @@ class EvidenceDiffSnapshotRecord(Base):
     classification: Mapped[str] = mapped_column(String(16), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: Alerts, monitoring universe, and their user read-state -- see
+# app.alerts.schemas / app.monitoring.schemas for the pydantic models these
+# mirror. `AlertEventRecord.dedup_key` carries the actual exactly-once
+# guarantee (§47 of the Phase 14 spec) via its UniqueConstraint, not an
+# in-memory set -- app.alerts.service catches the IntegrityError it raises
+# and treats it as "already recorded."
+# ---------------------------------------------------------------------------
+
+
+class AlertEventRecord(Base):
+    __tablename__ = "alert_events"
+    __table_args__ = (UniqueConstraint("dedup_key", name="uq_alert_events_dedup_key"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    alert_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    decision_plan_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    alert_type: Mapped[str] = mapped_column(String(32), index=True)
+    severity: Mapped[str] = mapped_column(String(16), index=True)
+    origin: Mapped[str] = mapped_column(String(32), index=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    dedup_key: Mapped[str] = mapped_column(String(255), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AlertAcknowledgementRecord(Base):
+    """User read-state, kept in its own table so acknowledging an alert
+    never touches the immutable AlertEventRecord row it refers to."""
+
+    __tablename__ = "alert_acknowledgements"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    alert_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    acknowledged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class AlertPreferenceRecord(Base):
+    __tablename__ = "alert_preferences"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    alert_type: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean)
+    row_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class MonitoringSubscriptionRecord(Base):
+    """The actual persisted source of truth for the monitoring universe
+    (§8) -- seeded from the watchlist but independently toggleable, since
+    WatchlistRepository itself is in-memory only."""
+
+    __tablename__ = "monitoring_subscriptions"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    symbol: Mapped[str] = mapped_column(String(16), unique=True, index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    decision_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    preferred_timeframes: Mapped[dict] = mapped_column(JSON, default=list)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

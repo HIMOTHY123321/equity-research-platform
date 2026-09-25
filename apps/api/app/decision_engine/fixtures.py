@@ -31,6 +31,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from app.ai_analysis.market_snapshot import MarketSnapshot, build_market_snapshot
+from app.alerts.schemas import AlertOrigin
+from app.alerts.service import AlertService
 from app.decision_engine.repository import DecisionEngineRepository
 from app.decision_engine.schemas import (
     BarSemantics,
@@ -346,7 +348,9 @@ def build_fixture_plan(scenario: FixtureScenario, as_of: datetime) -> DecisionPl
 
 
 def run_fixture_scenario(
-    scenario_name: str, repository: Optional[DecisionEngineRepository] = None
+    scenario_name: str,
+    repository: Optional[DecisionEngineRepository] = None,
+    alert_service: Optional[AlertService] = None,
 ) -> list[DecisionPlan]:
     """Steps a fixture plan through every `as_of` in its scenario using the
     REAL, unmodified evaluate_plan -- the exact function live evaluation and
@@ -355,7 +359,11 @@ def run_fixture_scenario(
     repository is given, each step's plan/transitions/conditions are
     persisted through it, so the existing /api/decisions endpoints and the
     existing Decision Monitor UI can display the fixture with zero new
-    frontend code."""
+    frontend code. If `alert_service` is given, every transition also flows
+    through the REAL, unmodified AlertService.emit_transition_alert -- but
+    tagged `origin=AlertOrigin.DEV_FIXTURE` (§35/§56), the one thing that
+    marks it as never eligible to count toward Forward Validation or appear
+    as genuine monitoring history."""
     scenario = FIXTURE_SCENARIOS[scenario_name]
     provider = fixture_provider(scenario)
     plan = build_fixture_plan(scenario, scenario.steps[0].as_of)
@@ -363,6 +371,8 @@ def run_fixture_scenario(
         repository.save_plan(plan)
         for t in plan.transitions:
             repository.record_transition(t)
+            if alert_service is not None:
+                alert_service.emit_transition_alert(plan, t, origin=AlertOrigin.DEV_FIXTURE)
 
     history = [plan]
     for step in scenario.steps:
@@ -374,6 +384,8 @@ def run_fixture_scenario(
             repository.save_plan(plan)
             for t in result.transitions:
                 repository.record_transition(t)
+                if alert_service is not None:
+                    alert_service.emit_transition_alert(plan, t, origin=AlertOrigin.DEV_FIXTURE)
             if result.evaluated_conditions:
                 repository.record_condition_evaluations(plan.decision_plan_id, result.evaluated_conditions)
             if result.evidence_diff is not None:

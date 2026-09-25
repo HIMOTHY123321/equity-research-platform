@@ -142,8 +142,16 @@ class LiveClient {
       case "snapshot_refreshed":
       case "forecast_resolved":
       case "catalyst_event":
-        // Consumed by dedicated hooks (Forecast Lab / catalyst panels) via
-        // onGlobalEvent, not the per-symbol quote/candle cache.
+      case "alert_event":
+      case "decision_state_change":
+      case "monitor_status":
+        // Consumed by dedicated hooks (Forecast Lab / catalyst panels /
+        // useAlerts / useDecisionScanner) via onGlobalEvent, not the
+        // per-symbol quote/candle cache. Phase 14's three frame types are
+        // broadcast to every connection regardless of symbol subscription
+        // (see app.api.routes.live._UNIVERSE_WIDE_FRAME_TYPES) since the
+        // Alert Center/Scanner show the whole monitored universe, not just
+        // whatever symbol is currently viewed.
         this.notifyGlobal(frame);
         return;
       case "error":

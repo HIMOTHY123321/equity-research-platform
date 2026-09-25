@@ -22,7 +22,7 @@ from typing import Optional
 from app.ai_analysis.market_snapshot import MarketSnapshot, build_market_snapshot
 from app.decision_engine.conditions import ConditionContext, evaluate
 from app.decision_engine.evidence_diff import compute_evidence_diff
-from app.decision_engine.plan_builder import build_activation_snapshot
+from app.decision_engine.plan_builder import build_activation_snapshot, build_decision_plan
 from app.decision_engine.repository import DecisionEngineRepository
 from app.decision_engine.schemas import (
     TERMINAL_STATES,
@@ -239,6 +239,71 @@ def evaluate_plan(
         plan=working.model_copy(update={"as_of": as_of}),
         transitions=transitions,
         evaluated_conditions=evaluated,
+    )
+
+
+@dataclass(frozen=True)
+class ScanResult:
+    plans: list[DecisionPlan]
+    """Every plan for this symbol/timeframe, new or pre-existing."""
+    new_plans: list[DecisionPlan]
+    """Plans created by this scan (fresh setups that had no plan yet) --
+    each carries its own DETECTED->EVALUATING(->WATCHING|ABSTAIN)
+    transitions in `.transitions`."""
+    transitions: list[DecisionTransition]
+    """Every transition produced by re-evaluating already-open plans this
+    pass (does not include new_plans' own initial transitions -- read those
+    off `new_plans[i].transitions` instead, same as plan_builder always
+    returns them)."""
+
+
+def run_symbol_scan(
+    symbol: str,
+    timeframe: Timeframe,
+    market_provider: MarketDataProvider,
+    repository: DecisionEngineRepository,
+    as_of: datetime,
+) -> ScanResult:
+    """One full scan for one symbol/timeframe: build a fresh snapshot,
+    create a DecisionPlan for every qualified setup that doesn't already
+    have one, evaluate every open plan against the same snapshot, and
+    persist everything. Extracted from app.api.routes.decisions.scan_symbol
+    (§6 of the Phase 14 plan -- the route and the Phase 14 monitoring
+    service must never carry two divergent implementations of the same
+    scan) with zero behavior change to the route; the route now just calls
+    this and returns `.plans`."""
+    snapshot = build_market_snapshot(symbol, timeframe, market_provider, as_of, now=as_of)
+
+    existing_setup_ids = {
+        p.setup_id for p in repository.list_plans(symbol=symbol, timeframe=timeframe.value, limit=1000)
+    }
+    new_plans: list[DecisionPlan] = []
+    for setup in snapshot.setup_snapshot.qualified_setups:
+        if setup.id in existing_setup_ids:
+            continue
+        plan = build_decision_plan(setup, as_of=as_of)
+        repository.save_plan(plan)
+        for transition in plan.transitions:
+            repository.record_transition(transition)
+        new_plans.append(plan)
+
+    open_plans = repository.list_plans(symbol=symbol, timeframe=timeframe.value, open_only=True)
+    all_transitions: list[DecisionTransition] = []
+    for plan in open_plans:
+        result = evaluate_plan(plan, snapshot, as_of)
+        repository.save_plan(result.plan)
+        for transition in result.transitions:
+            repository.record_transition(transition)
+        all_transitions.extend(result.transitions)
+        if result.evaluated_conditions:
+            repository.record_condition_evaluations(plan.decision_plan_id, result.evaluated_conditions)
+        if result.evidence_diff is not None:
+            repository.record_evidence_diff(result.evidence_diff)
+
+    return ScanResult(
+        plans=repository.list_plans(symbol=symbol, timeframe=timeframe.value, limit=1000),
+        new_plans=new_plans,
+        transitions=all_transitions,
     )
 
 

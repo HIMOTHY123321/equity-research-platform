@@ -19,8 +19,9 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
-from app.ai_analysis.market_snapshot import build_market_snapshot
-from app.api.deps import get_market_data_provider
+from app.alerts.repository import AlertRepository, SqlAlchemyAlertRepository
+from app.alerts.service import AlertService
+from app.api.deps import get_market_data_provider, get_watchlist_repository
 from app.api.routes.market import _validated_symbol, _validated_timeframe
 from app.config import get_settings
 from app.database.session import get_db
@@ -32,13 +33,26 @@ from app.decision_engine.ai_brief import (
     why_now,
 )
 from app.decision_engine.fixtures import FIXTURE_SCENARIOS, run_fixture_scenario
-from app.decision_engine.plan_builder import build_decision_plan
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
+from app.decision_engine.scanner import ScannerRow, build_scanner_rows
 from app.decision_engine.schemas import TERMINAL_STATES, DecisionPlan, DecisionTransition
-from app.decision_engine.service import evaluate_plan
+from app.decision_engine.service import run_symbol_scan
 from app.market_data.provider import MarketDataProvider
+from app.monitoring.universe import MonitoringUniverse
+from app.watchlist.repository import WatchlistRepository
 
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
+
+
+def _alert_repository(db: Session = Depends(get_db)) -> AlertRepository:
+    return SqlAlchemyAlertRepository(db)
+
+
+def _monitoring_universe(
+    alert_repository: AlertRepository = Depends(_alert_repository),
+    watchlist: WatchlistRepository = Depends(get_watchlist_repository),
+) -> MonitoringUniverse:
+    return MonitoringUniverse(alert_repository, watchlist)
 
 
 def _decision_repository(db: Session = Depends(get_db)) -> DecisionEngineRepository:
@@ -54,7 +68,9 @@ def _get_plan_or_404(decision_plan_id: str, repository: DecisionEngineRepository
 
 @router.post("/_dev/fixtures/{scenario}/replay", response_model=DecisionPlan)
 def replay_fixture_scenario(
-    scenario: str, repository: DecisionEngineRepository = Depends(_decision_repository)
+    scenario: str,
+    repository: DecisionEngineRepository = Depends(_decision_repository),
+    alert_repository: AlertRepository = Depends(_alert_repository),
 ) -> DecisionPlan:
     """Dev/QA-only: drives one of the deterministic Phase 13.1 lifecycle
     fixtures (app.decision_engine.fixtures) through the REAL, unmodified
@@ -66,10 +82,17 @@ def replay_fixture_scenario(
     (ZFXA/ZFXB/ZFXC) can never collide with a real ticker. Declared before
     `/{decision_plan_id}` so it is never shadowed by that path.
 
+    Phase 14: every transition also flows through the real AlertService,
+    tagged `origin=AlertOrigin.DEV_FIXTURE` (§35/§56) -- exercises the
+    Alert Center UI end to end without waiting on real market data, while
+    remaining mechanically excluded from Forward Validation and from ever
+    looking like genuine monitoring history (every query behind those
+    features filters on `origin`).
+
     Gated on `settings.environment == "development"` (404, not 403 -- the
     route doesn't even acknowledge it exists outside dev) so this can never
-    be reached in a production deployment and no fixture data can ever enter
-    a production database."""
+    be reached in a production deployment and no fixture data -- decision
+    plans OR alerts -- can ever enter a production database."""
     if get_settings().environment != "development":
         raise HTTPException(status_code=404, detail="Not Found")
     if scenario not in FIXTURE_SCENARIOS:
@@ -77,7 +100,8 @@ def replay_fixture_scenario(
             status_code=404,
             detail=f"Unknown fixture scenario {scenario!r}. Known: {sorted(FIXTURE_SCENARIOS)}",
         )
-    history = run_fixture_scenario(scenario, repository)
+    alert_service = AlertService(alert_repository)
+    history = run_fixture_scenario(scenario, repository, alert_service)
     return history[-1]
 
 
@@ -92,36 +116,7 @@ def scan_symbol(
     validated_timeframe = _validated_timeframe(timeframe)
     as_of = datetime.now(timezone.utc)
 
-    snapshot = build_market_snapshot(validated_symbol, validated_timeframe, market_provider, as_of, now=as_of)
-
-    existing_setup_ids = {
-        p.setup_id
-        for p in repository.list_plans(
-            symbol=validated_symbol, timeframe=validated_timeframe.value, limit=1000
-        )
-    }
-    for setup in snapshot.setup_snapshot.qualified_setups:
-        if setup.id in existing_setup_ids:
-            continue
-        plan = build_decision_plan(setup, as_of=as_of)
-        repository.save_plan(plan)
-        for transition in plan.transitions:
-            repository.record_transition(transition)
-
-    open_plans = repository.list_plans(
-        symbol=validated_symbol, timeframe=validated_timeframe.value, open_only=True
-    )
-    for plan in open_plans:
-        result = evaluate_plan(plan, snapshot, as_of)
-        repository.save_plan(result.plan)
-        for transition in result.transitions:
-            repository.record_transition(transition)
-        if result.evaluated_conditions:
-            repository.record_condition_evaluations(plan.decision_plan_id, result.evaluated_conditions)
-        if result.evidence_diff is not None:
-            repository.record_evidence_diff(result.evidence_diff)
-
-    return repository.list_plans(symbol=validated_symbol, timeframe=validated_timeframe.value, limit=1000)
+    return run_symbol_scan(validated_symbol, validated_timeframe, market_provider, repository, as_of).plans
 
 
 @router.get("", response_model=list[DecisionPlan])
@@ -136,6 +131,20 @@ def list_decisions(
     return repository.list_plans(
         symbol=symbol, timeframe=timeframe, state=state, open_only=open_only, limit=limit
     )
+
+
+@router.get("/scanner", response_model=list[ScannerRow])
+def get_decision_scanner(
+    universe: MonitoringUniverse = Depends(_monitoring_universe),
+    repository: DecisionEngineRepository = Depends(_decision_repository),
+) -> list[ScannerRow]:
+    """The cross-symbol Decision Scanner (§9/§36): one deterministic,
+    urgency-sorted row per monitored symbol, read-only -- never triggers a
+    scan itself (the background MonitoringService does that; see
+    app.monitoring.service). Declared before `/{decision_plan_id}` so the
+    literal path `scanner` is never captured by that path parameter."""
+    symbols = universe.list_enabled_symbols()
+    return build_scanner_rows(symbols, repository)
 
 
 @router.get("/{decision_plan_id}", response_model=DecisionPlan)

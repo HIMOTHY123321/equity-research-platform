@@ -14,13 +14,16 @@ from app.api.deps import (
     get_news_provider,
     get_shared_market_data_cache,
     get_streaming_provider,
+    get_watchlist_repository,
 )
 from app.api.routes import (
+    alerts,
     analysis,
     decisions,
     forecasts,
     live,
     market,
+    monitoring,
     news,
     research,
     research_catalysts,
@@ -43,6 +46,7 @@ from app.market_data.exceptions import (
     ProviderError,
     RateLimitError,
 )
+from app.monitoring.service import MonitoringService
 
 settings = get_settings()
 
@@ -97,18 +101,35 @@ async def lifespan(app: FastAPI):
     forecast_monitor = ForecastMonitor(SessionLocal, market_provider, news_provider, config=live_config)
     news_monitor = NewsMonitor(SessionLocal, news_provider, config=live_config)
 
+    # Phase 14: the background monitor that finally drives the Decision
+    # Engine across a whole configurable universe rather than only ever
+    # reacting to a manual `/scan` click (§11). Shares the same process-wide
+    # WatchlistRepository singleton every /api/watchlist request uses, so
+    # what it seeds the monitoring universe from is the user's actual
+    # watchlist, not a second divergent one.
+    watchlist_repository = app.dependency_overrides.get(
+        get_watchlist_repository, get_watchlist_repository
+    )()
+    monitoring_service = MonitoringService(
+        SessionLocal, watchlist_repository, market_provider, config=live_config
+    )
+
     app.state.live_service = live_service
     app.state.recompute_engine = recompute_engine
     app.state.forecast_monitor = forecast_monitor
     app.state.news_monitor = news_monitor
+    app.state.monitoring_service = monitoring_service
+    app.state.alert_event_bus = monitoring_service.event_bus
 
     await recompute_engine.start()
     await forecast_monitor.start()
     await news_monitor.start()
+    await monitoring_service.start()
 
     try:
         yield
     finally:
+        await monitoring_service.stop()
         await news_monitor.stop()
         await forecast_monitor.stop()
         await recompute_engine.stop()
@@ -137,6 +158,8 @@ app.include_router(forecasts.router)
 app.include_router(decisions.router)
 app.include_router(live.router)
 app.include_router(symbols.router)
+app.include_router(alerts.router)
+app.include_router(monitoring.router)
 
 
 @app.exception_handler(AuthenticationError)

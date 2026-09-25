@@ -18,6 +18,10 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/useLiveSymbol", () => ({
   useLiveSymbol: () => ({ quote: null, candles: {}, connectionState: "connected" }),
   useLiveConnectionState: () => "connected",
+  // Phase 14: useAlerts/useDecisionScanner (pulled in transitively via the
+  // sidebar Watchlist's Decision-state dot/monitoring toggle) subscribe to
+  // this -- a no-op unsubscribe is all this wiring test needs.
+  useLiveGlobalEvent: () => {},
 }));
 
 vi.mock("@/hooks/useStreamingActive", () => ({
@@ -69,6 +73,8 @@ describe("MarketWorkspace <-> sidebar Watchlist wiring (regression)", () => {
     vi.spyOn(api, "getSetups").mockRejectedValue(new Error("not needed for this test"));
     vi.spyOn(api, "getSymbolCatalysts").mockRejectedValue(new Error("not needed for this test"));
     vi.spyOn(api, "scanDecisions").mockRejectedValue(new Error("not needed for this test"));
+    vi.spyOn(api, "getDecisionScanner").mockResolvedValue([]);
+    vi.spyOn(api, "listMonitoring").mockResolvedValue([]);
   });
 
   it("clicking NVDA in the sidebar watchlist calls router.push with ?symbol=NVDA", async () => {

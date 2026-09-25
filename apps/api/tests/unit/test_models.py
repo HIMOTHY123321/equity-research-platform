@@ -37,6 +37,10 @@ EXPECTED_TABLES = {
     "decision_transitions",
     "decision_condition_evaluations",
     "decision_evidence_diff_snapshots",
+    "alert_events",
+    "alert_acknowledgements",
+    "alert_preferences",
+    "monitoring_subscriptions",
 }
 
 

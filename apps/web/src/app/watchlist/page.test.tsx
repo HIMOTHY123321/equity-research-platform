@@ -11,6 +11,11 @@ vi.mock("next/navigation", () => ({
 vi.mock("@/hooks/useLiveSymbol", () => ({
   useLiveSymbol: () => ({ quote: null, candles: {}, connectionState: "connected" }),
   useLiveConnectionState: () => "connected",
+  // Phase 14: the TopNav unread-alert badge (useUnreadAlertCount) this page
+  // renders, plus the Watchlist sidebar decision-status/monitoring-toggle
+  // hooks, all subscribe to this -- a no-op is all this navigation-regression
+  // suite needs.
+  useLiveGlobalEvent: () => {},
 }));
 vi.mock("@/hooks/useStreamingActive", () => ({
   useStreamingActive: () => false,
@@ -30,6 +35,7 @@ describe("dedicated Watchlist page rows (regression)", () => {
     vi.restoreAllMocks();
     pushMock.mockClear();
     vi.spyOn(api, "getWatchlist").mockResolvedValue(SYMBOLS);
+    vi.spyOn(api, "getUnreadAlertCount").mockResolvedValue({ count: 0 });
   });
 
   it("clicking a row navigates to /?symbol=<ticker> via router.push", async () => {

@@ -1,4 +1,6 @@
 import type {
+  AlertEvent,
+  AlertPreference,
   AnalogQueryResponse,
   AnalysisMode,
   BriefListItem,
@@ -22,12 +24,14 @@ import type {
   LiveStatusResponse,
   MarketReaction,
   MarketStructureSnapshot,
+  MonitoringSubscription,
   NormalizedNewsArticle,
   ResearchBrief,
   ResearchQueryResponse,
   ResearchRun,
   ResearchRunSummary,
   ResearchSnapshot,
+  ScannerRow,
   SetupCandidate,
   SetupCatalystContext,
   SetupDetectionSnapshot,
@@ -500,4 +504,70 @@ export function getDecisionExplanations(decisionPlanId: string): Promise<Decisio
 
 export function getForecastGate(): Promise<ForwardValidationGateEvaluation> {
   return request<ForwardValidationGateEvaluation>(`/api/forecasts/gate`);
+}
+
+// ---- Alerts, Monitoring & Decision Scanner (Phase 14) ---------------------
+
+export function listAlerts(
+  params: {
+    symbol?: string;
+    alertType?: string;
+    severity?: string;
+    origin?: string;
+    unreadOnly?: boolean;
+    limit?: number;
+  } = {},
+): Promise<AlertEvent[]> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.alertType) query.set("alert_type", params.alertType);
+  if (params.severity) query.set("severity", params.severity);
+  if (params.origin) query.set("origin", params.origin);
+  if (params.unreadOnly) query.set("unread_only", "true");
+  query.set("limit", String(params.limit ?? 200));
+  return request<AlertEvent[]>(`/api/alerts?${query}`);
+}
+
+export function getUnreadAlertCount(symbol?: string): Promise<{ count: number }> {
+  const query = new URLSearchParams();
+  if (symbol) query.set("symbol", symbol);
+  return request<{ count: number }>(`/api/alerts/unread-count?${query}`);
+}
+
+export function acknowledgeAlert(alertId: string): Promise<void> {
+  return request<void>(`/api/alerts/${alertId}/acknowledge`, { method: "POST" });
+}
+
+export function acknowledgeAllAlerts(symbol?: string): Promise<{ acknowledged: number }> {
+  const query = new URLSearchParams();
+  if (symbol) query.set("symbol", symbol);
+  return request<{ acknowledged: number }>(`/api/alerts/acknowledge-all?${query}`, { method: "POST" });
+}
+
+export function getAlertPreferences(): Promise<AlertPreference[]> {
+  return request<AlertPreference[]>(`/api/alerts/preferences`);
+}
+
+export function setAlertPreference(alertType: string, enabled: boolean): Promise<AlertPreference> {
+  return request<AlertPreference>(`/api/alerts/preferences/${alertType}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+export function listMonitoring(): Promise<MonitoringSubscription[]> {
+  return request<MonitoringSubscription[]>(`/api/monitoring`);
+}
+
+export function enableMonitoring(symbol: string): Promise<MonitoringSubscription> {
+  return request<MonitoringSubscription>(`/api/monitoring/${symbol}`, { method: "POST" });
+}
+
+export function disableMonitoring(symbol: string): Promise<void> {
+  return request<void>(`/api/monitoring/${symbol}`, { method: "DELETE" });
+}
+
+export function getDecisionScanner(): Promise<ScannerRow[]> {
+  return request<ScannerRow[]>(`/api/decisions/scanner`);
 }

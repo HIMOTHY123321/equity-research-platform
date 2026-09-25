@@ -91,13 +91,27 @@ function ExplanationBlock({ decisionPlanId }: { decisionPlanId: string }) {
   );
 }
 
-export function DecisionPlanCard({ plan }: { plan: DecisionPlan }) {
-  const [expanded, setExpanded] = useState(false);
+export function DecisionPlanCard({
+  plan,
+  highlighted = false,
+}: {
+  plan: DecisionPlan;
+  /** Phase 14 §25 deep linking: true when this card was opened via an
+   * `/alerts` or Decision Scanner "Open plan" link -- auto-expands and
+   * visually marks it so the user lands directly on the relevant plan
+   * instead of having to find it among possibly several open plans. */
+  highlighted?: boolean;
+}) {
+  const [expanded, setExpanded] = useState(highlighted);
   const lastTransition = plan.transitions[plan.transitions.length - 1] ?? null;
   const missingEntry = plan.entry_conditions.filter((c) => c.status !== "passed");
 
   return (
-    <li className="rounded border border-border bg-surface-raised p-3">
+    <li
+      className={`rounded border p-3 ${
+        highlighted ? "border-accent bg-surface-raised ring-1 ring-accent/50" : "border-border bg-surface-raised"
+      }`}
+    >
       <div className="flex w-full items-start justify-between gap-2">
         <button
           type="button"

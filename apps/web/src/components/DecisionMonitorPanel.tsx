@@ -15,7 +15,15 @@ const TERMINAL_STATES = new Set(["abstain", "invalidated", "exit_conditions_met"
  * visible at once rather than collapsed into one summary. Presentational
  * only -- fetching lives in useDecisionPlans(), owned by MarketWorkspace.
  */
-export function DecisionMonitorPanel({ symbol, query }: { symbol: string | null; query: AsyncResource<DecisionPlan[]> }) {
+export function DecisionMonitorPanel({
+  symbol,
+  query,
+  highlightPlanId,
+}: {
+  symbol: string | null;
+  query: AsyncResource<DecisionPlan[]>;
+  highlightPlanId?: string | null;
+}) {
   const { data: plans, state, error } = query;
 
   if (!symbol) {
@@ -51,7 +59,11 @@ export function DecisionMonitorPanel({ symbol, query }: { symbol: string | null;
       {open.length > 0 ? (
         <ul className="space-y-2">
           {open.map((plan) => (
-            <DecisionPlanCard key={plan.decision_plan_id} plan={plan} />
+            <DecisionPlanCard
+              key={plan.decision_plan_id}
+              plan={plan}
+              highlighted={plan.decision_plan_id === highlightPlanId}
+            />
           ))}
         </ul>
       ) : (
@@ -65,7 +77,11 @@ export function DecisionMonitorPanel({ symbol, query }: { symbol: string | null;
           <h4 className="mb-2 text-[10px] font-semibold tracking-wide text-muted">RESOLVED / ABSTAINED</h4>
           <ul className="space-y-2">
             {terminal.map((plan) => (
-              <DecisionPlanCard key={plan.decision_plan_id} plan={plan} />
+              <DecisionPlanCard
+                key={plan.decision_plan_id}
+                plan={plan}
+                highlighted={plan.decision_plan_id === highlightPlanId}
+              />
             ))}
           </ul>
         </div>

@@ -21,10 +21,12 @@ from typing import Literal, Optional
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
+from app.alerts.service import AlertEmittedEvent
 from app.live.config import DEFAULT_LIVE_CONFIG, SubscriptionPriority
 from app.live.forecast_monitor import ForecastResolvedEvent
 from app.live.news_monitor import NewEvidenceEvent
 from app.live.recompute import SnapshotRefreshedEvent
+from app.monitoring.service import DecisionStateChangeEvent, MonitorStatusEvent
 from app.schemas.market_data import Timeframe
 
 logger = logging.getLogger(__name__)
@@ -32,6 +34,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/live", tags=["live"])
 
 _PRIORITY_BY_NAME = {p.value: p for p in SubscriptionPriority}
+
+# (§19) alert_event/decision_state_change/monitor_status must reach every
+# connection regardless of which symbols it happens to be subscribed to --
+# the Alert Center and Decision Scanner show the whole monitored universe,
+# not just whatever symbol's chart is currently open. Every other typed
+# frame stays filtered to `subscribed_symbols` by `_writer` below.
+_UNIVERSE_WIDE_FRAME_TYPES = frozenset({"alert_event", "decision_state_change", "monitor_status"})
 
 
 class SubscribeMessage(BaseModel):
@@ -88,6 +97,29 @@ def _event_to_frame(event: object) -> Optional[dict]:
             "symbol": event.symbol,
             "new_article_count": event.new_article_count,
             "detected_at": event.detected_at.isoformat(),
+        }
+    if isinstance(event, AlertEmittedEvent):
+        return {
+            "type": "alert_event",
+            "symbol": event.alert.symbol,
+            "alert": event.alert.model_dump(mode="json"),
+        }
+    if isinstance(event, DecisionStateChangeEvent):
+        return {
+            "type": "decision_state_change",
+            "symbol": event.symbol,
+            "decision_plan_id": event.decision_plan_id,
+            "from_state": event.from_state,
+            "to_state": event.to_state,
+            "occurred_at": event.occurred_at.isoformat(),
+        }
+    if isinstance(event, MonitorStatusEvent):
+        return {
+            "type": "monitor_status",
+            "symbol": event.symbol,
+            "status": event.status,
+            "detail": event.detail,
+            "at": event.at.isoformat(),
         }
     logger.warning("Unrecognized live event type %s.%s -- dropped, not forwarded", module, name)
     return None
@@ -152,6 +184,8 @@ async def live_stream(websocket: WebSocket) -> None:
     recompute_engine = getattr(app_state, "recompute_engine", None)
     forecast_monitor = getattr(app_state, "forecast_monitor", None)
     news_monitor = getattr(app_state, "news_monitor", None)
+    alert_event_bus = getattr(app_state, "alert_event_bus", None)
+    monitoring_service = getattr(app_state, "monitoring_service", None)
     live_config = getattr(app_state, "live_config", DEFAULT_LIVE_CONFIG)
 
     await websocket.accept()
@@ -173,6 +207,8 @@ async def live_stream(websocket: WebSocket) -> None:
     recompute_queue = recompute_engine.add_listener() if recompute_engine else None
     forecast_queue = forecast_monitor.add_listener() if forecast_monitor else None
     news_queue = news_monitor.add_listener() if news_monitor else None
+    alert_queue = alert_event_bus.add_listener() if alert_event_bus else None
+    monitoring_queue = monitoring_service.add_listener() if monitoring_service else None
 
     background_tasks = [asyncio.create_task(_forward(live_queue, outbound))]
     if recompute_queue is not None:
@@ -181,16 +217,27 @@ async def live_stream(websocket: WebSocket) -> None:
         background_tasks.append(asyncio.create_task(_forward(forecast_queue, outbound)))
     if news_queue is not None:
         background_tasks.append(asyncio.create_task(_forward(news_queue, outbound)))
+    if alert_queue is not None:
+        background_tasks.append(asyncio.create_task(_forward(alert_queue, outbound)))
+    if monitoring_queue is not None:
+        background_tasks.append(asyncio.create_task(_forward(monitoring_queue, outbound)))
     background_tasks.append(asyncio.create_task(_heartbeat(outbound, live_config.heartbeat_interval_seconds)))
 
     # Every subscribed-symbol event is broadcast to every connection (the
     # shared-listener design #O); this connection only ever forwards on the
-    # symbols it actually asked for.
+    # symbols it actually asked for -- except the Phase 14 universe-wide
+    # types (alert_event/decision_state_change/monitor_status), which every
+    # connection receives regardless of subscription (see
+    # _UNIVERSE_WIDE_FRAME_TYPES above).
     async def _writer() -> None:
         while True:
             frame = await outbound.get()
             symbol = frame.get("symbol")
-            if symbol is not None and symbol not in subscribed_symbols:
+            if (
+                symbol is not None
+                and symbol not in subscribed_symbols
+                and frame.get("type") not in _UNIVERSE_WIDE_FRAME_TYPES
+            ):
                 continue
             await websocket.send_json(frame)
 
@@ -265,5 +312,9 @@ async def live_stream(websocket: WebSocket) -> None:
             forecast_monitor.remove_listener(forecast_queue)
         if news_monitor and news_queue is not None:
             news_monitor.remove_listener(news_queue)
+        if alert_event_bus and alert_queue is not None:
+            alert_event_bus.remove_listener(alert_queue)
+        if monitoring_service and monitoring_queue is not None:
+            monitoring_service.remove_listener(monitoring_queue)
         for symbol in list(subscribed_symbols):
             await live_service.unsubscribe(symbol)

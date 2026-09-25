@@ -23,7 +23,8 @@ export type GlossaryCategoryId =
   | "evidence_validation"
   | "live_market_data"
   | "risk_trade_management"
-  | "decision_engine";
+  | "decision_engine"
+  | "alerts_monitoring";
 
 export interface GlossaryCategory {
   id: GlossaryCategoryId;
@@ -43,6 +44,7 @@ export const GLOSSARY_CATEGORIES: GlossaryCategory[] = [
   { id: "live_market_data", label: "Live Market Data" },
   { id: "risk_trade_management", label: "Risk / Trade Management" },
   { id: "decision_engine", label: "Decision Engine" },
+  { id: "alerts_monitoring", label: "Alerts & Monitoring" },
 ];
 
 export interface GlossaryTermEntry {
@@ -1490,6 +1492,134 @@ export const GLOSSARY_TERMS: GlossaryTermEntry[] = [
     whyItMatters: "Prevents a stale setup from being monitored indefinitely with no resolution.",
     howDeskUsesIt: "Modeled as a typed time_elapsed exit condition on the plan, visible in \"what would change the state\".",
     related: ["watching", "expired"],
+  },
+
+  // ---- M. Alerts, Monitoring & Decision Scanner (Phase 14) --------------
+  {
+    id: "alert-event",
+    term: "Alert Event",
+    category: "alerts_monitoring",
+    shortDefinition: "An immutable record of one deterministic change already produced by the Decision Engine -- a state transition, a condition flipping, a data-freshness change, and so on.",
+    whyItMatters: "Alerts are never invented or scored by an AI model; each one points back to deterministic evidence that already existed before the alert was created.",
+    howDeskUsesIt: "Populates the Alert Center and the live unread-count badge; every alert links back to the exact Decision Plan/transition that produced it.",
+    related: ["decision-alert", "alert-severity", "unread-alert"],
+  },
+  {
+    id: "decision-alert",
+    term: "Decision Alert",
+    category: "alerts_monitoring",
+    shortDefinition: "An Alert Event whose type mirrors a Decision Plan state transition -- e.g. Entry Conditions Met, Thesis Weakening, Invalidated.",
+    whyItMatters: "Distinguishes trading-relevant alerts from infrastructure alerts (Data Stale, Stream Disconnected), which are classified separately.",
+    howDeskUsesIt: "The Alert Center and Decision Scanner both use the same underlying state names as the Decision Monitor -- never a different vocabulary.",
+    related: ["alert-event", "decision-plan"],
+  },
+  {
+    id: "alert-severity",
+    term: "Alert Severity",
+    category: "alerts_monitoring",
+    shortDefinition: "INFO, NOTICE, IMPORTANT, or CRITICAL -- answers \"how urgently should I look at this,\" never \"how likely is this trade to win.\"",
+    whyItMatters: "Keeps urgency and outcome-likelihood strictly separate; there is no confidence percentage or win-probability anywhere in the alert system.",
+    howDeskUsesIt: "Drives the Alert Center's filter tabs and the color of each alert card; Invalidated is always CRITICAL, Watching is always INFO.",
+    related: ["alert-event"],
+  },
+  {
+    id: "unread-alert",
+    term: "Unread Alert",
+    category: "alerts_monitoring",
+    shortDefinition: "An Alert Event with no matching acknowledgement record yet -- UI/read-state only, stored separately from the alert itself.",
+    whyItMatters: "Marking an alert as read never rewrites or deletes the underlying deterministic evidence -- the two are kept in separate tables on purpose.",
+    howDeskUsesIt: "Drives the unread-count badge in the top nav and the Alert Center's Unread filter.",
+    related: ["alert-event", "acknowledged-alert"],
+  },
+  {
+    id: "acknowledged-alert",
+    term: "Acknowledged Alert",
+    category: "alerts_monitoring",
+    shortDefinition: "An Alert Event the user has explicitly marked as read, via \"Mark as read\" or \"Mark all as read.\"",
+    whyItMatters: "Acknowledgement is a separate, mutable record layered on top of an immutable Alert Event -- never a mutation of the alert itself.",
+    howDeskUsesIt: "Acknowledged alerts remain fully visible in the Alert Center's All view -- acknowledging never deletes history.",
+    related: ["unread-alert"],
+  },
+  {
+    id: "monitoring-universe",
+    term: "Monitoring Universe",
+    category: "alerts_monitoring",
+    shortDefinition: "The configurable set of symbols the background monitor actively scans for Decision Plan changes, independent of Watchlist membership.",
+    whyItMatters: "Viewing a symbol's chart is not the same as wanting alerts for it -- the two are deliberately separate toggles.",
+    howDeskUsesIt: "Seeded from the Watchlist the first time it's empty, then independently toggleable per symbol from the Watchlist sidebar or the Monitoring API.",
+    related: ["decision-scanner"],
+  },
+  {
+    id: "decision-scanner",
+    term: "Decision Scanner",
+    category: "alerts_monitoring",
+    shortDefinition: "A cross-symbol, urgency-sorted summary of the Decision Engine's current state across the whole Monitoring Universe -- explicitly not a ranking.",
+    whyItMatters: "Lets the desk see what changed across many symbols at once without opening each ticker individually, without ever implying one setup is \"better\" than another.",
+    howDeskUsesIt: "Sortable by state urgency, newest change, or symbol only -- never by a score, confidence, or expected return.",
+    related: ["monitoring-universe", "decision-plan"],
+  },
+  {
+    id: "alert-deduplication",
+    term: "Alert Deduplication",
+    category: "alerts_monitoring",
+    shortDefinition: "The guarantee that the same underlying change never produces more than one Alert Event, enforced by a database uniqueness constraint on a deterministic key.",
+    whyItMatters: "Re-evaluating the same transition twice (including after a backend restart) must never create a duplicate alert -- this is enforced at the database level, not by an in-memory list that a restart would forget.",
+    howDeskUsesIt: "Every alert's dedup key is derived from the Decision Plan, transition, and alert type (or, for non-transition alerts, from the symbol/type/identity/time bucket) -- never random.",
+    related: ["alert-event", "alert-cooldown"],
+  },
+  {
+    id: "alert-cooldown",
+    term: "Alert Cooldown",
+    category: "alerts_monitoring",
+    shortDefinition: "A minimum interval between repeated alerts for the same persistently-true condition (e.g. \"still stale\"), so a poll loop doesn't spam identical alerts.",
+    whyItMatters: "Cooldowns never suppress the decisive Decision Plan alerts (Entry Conditions Met, Invalidated, Exit Conditions Met) -- only repetitive infrastructure-style alerts.",
+    howDeskUsesIt: "Implemented as a time-bucketed component of the Alert Deduplication key, not a separate suppression system.",
+    related: ["alert-deduplication", "data-stale"],
+  },
+  {
+    id: "data-stale",
+    term: "Data Stale",
+    category: "alerts_monitoring",
+    shortDefinition: "An alert emitted once when a symbol's market data crosses from fresh/aging into stale, based on the existing freshness classification.",
+    whyItMatters: "Distinguishes a genuine data problem from ordinary polling delay -- and is emitted once per staleness episode, not on every poll.",
+    howDeskUsesIt: "Classified as an infrastructure alert, visually separate from Decision Alerts, since it says nothing about the trade setup itself.",
+    related: ["data-recovered"],
+  },
+  {
+    id: "data-recovered",
+    term: "Data Recovered",
+    category: "alerts_monitoring",
+    shortDefinition: "An alert emitted once when a symbol's market data returns to fresh after a Data Stale episode.",
+    whyItMatters: "Closes the loop on a Data Stale alert so the desk knows when it's safe to trust the feed again.",
+    howDeskUsesIt: "Paired with Data Stale in the Alert Center's history for that symbol.",
+    related: ["data-stale"],
+  },
+  {
+    id: "stream-disconnected",
+    term: "Stream Disconnected",
+    category: "alerts_monitoring",
+    shortDefinition: "An infrastructure alert marking a genuine loss of the streaming market-data connection, distinct from any trading-relevant Decision Alert.",
+    whyItMatters: "Keeps connectivity issues visually and semantically separate from setup/thesis changes -- a disconnect says nothing about whether a thesis is still valid.",
+    howDeskUsesIt: "Paired with Stream Reconnected; both reflect the same connection-status tracking the live data header already uses.",
+    related: ["stream-reconnected"],
+  },
+  {
+    id: "stream-reconnected",
+    term: "Stream Reconnected",
+    category: "alerts_monitoring",
+    shortDefinition: "An infrastructure alert marking recovery of the streaming market-data connection after a Stream Disconnected episode.",
+    whyItMatters: "Closes the loop on a Stream Disconnected alert.",
+    howDeskUsesIt: "Paired with Stream Disconnected in the Alert Center's history.",
+    related: ["stream-disconnected"],
+  },
+  {
+    id: "prospective-observation",
+    term: "Prospective Observation",
+    category: "alerts_monitoring",
+    shortDefinition: "A genuine, post-deployment Alert Event (Entry/Strengthening/Weakening/Exit/Invalidated) eligible to later contribute to Forward Validation outcome measurement.",
+    whyItMatters: "Dev fixtures and historical replay can never count as a prospective observation -- only alerts generated from real, live market evaluation are eligible, so Forward Validation sample counts stay honest.",
+    howDeskUsesIt: "Gated entirely by the alert's origin field; the Forward Validation Gate's sample counts only ever grow from this category.",
+    related: ["alert-event"],
   },
 ];
 

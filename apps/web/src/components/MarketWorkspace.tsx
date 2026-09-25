@@ -65,23 +65,42 @@ import type { Timeframe } from "@/lib/types";
  * the server-computed `defaultSymbol` prop; `SymbolUrlWatcher` syncs in the
  * real URL value shortly after (typically the same tick), same as before.
  */
-function SymbolUrlWatcher({ onChange }: { onChange: (symbol: string | null) => void }) {
+function SymbolUrlWatcher({
+  onChange,
+  onDecisionChange,
+}: {
+  onChange: (symbol: string | null) => void;
+  onDecisionChange: (decisionPlanId: string | null) => void;
+}) {
   const searchParams = useSearchParams();
   const symbol = searchParams.get("symbol");
+  // Phase 14 §25 deep linking: `?decision=<id>` (paired with `?symbol=`)
+  // highlights/auto-expands the matching DecisionPlan card -- same
+  // isolated-leaf pattern as `symbol` above, so it costs nothing extra on
+  // first paint.
+  const decisionPlanId = searchParams.get("decision");
   useEffect(() => {
     onChange(symbol);
   }, [symbol, onChange]);
+  useEffect(() => {
+    onDecisionChange(decisionPlanId);
+  }, [decisionPlanId, onDecisionChange]);
   return null;
 }
 
 export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
   const [urlSymbol, setUrlSymbol] = useState<string | null>(null);
+  const [urlDecisionPlanId, setUrlDecisionPlanId] = useState<string | null>(null);
   return (
     <>
       <Suspense fallback={null}>
-        <SymbolUrlWatcher onChange={setUrlSymbol} />
+        <SymbolUrlWatcher onChange={setUrlSymbol} onDecisionChange={setUrlDecisionPlanId} />
       </Suspense>
-      <MarketWorkspaceInner defaultSymbol={defaultSymbol} urlSymbol={urlSymbol} />
+      <MarketWorkspaceInner
+        defaultSymbol={defaultSymbol}
+        urlSymbol={urlSymbol}
+        highlightDecisionPlanId={urlDecisionPlanId}
+      />
     </>
   );
 }
@@ -89,9 +108,11 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
 function MarketWorkspaceInner({
   defaultSymbol,
   urlSymbol,
+  highlightDecisionPlanId,
 }: {
   defaultSymbol: string;
   urlSymbol: string | null;
+  highlightDecisionPlanId: string | null;
 }) {
   const router = useRouter();
   // (#5/#9) Derived from the URL (server-set on first load via `defaultSymbol`,
@@ -315,7 +336,7 @@ function MarketWorkspaceInner({
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">
-        <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} />
+        <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} highlightPlanId={highlightDecisionPlanId} />
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">

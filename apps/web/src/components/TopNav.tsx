@@ -4,12 +4,16 @@ import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { Suspense } from "react";
 
+import { useUnreadAlertCount } from "@/hooks/useAlerts";
+
 const NAV_ITEMS = [
   { href: "/", label: "Overview", symbolAware: true },
   { href: "/research", label: "Research Lab", symbolAware: true },
   { href: "/forecasts", label: "Forecast Lab", symbolAware: true },
   { href: "/reports", label: "Reports", symbolAware: false },
   { href: "/watchlist", label: "Watchlist", symbolAware: false },
+  { href: "/scanner", label: "Scanner", symbolAware: false },
+  { href: "/alerts", label: "Alerts", symbolAware: false },
   { href: "/glossary", label: "Glossary", symbolAware: false },
 ];
 
@@ -20,6 +24,8 @@ function TopNavInner() {
   // Lab" from Overview?symbol=NVDA would silently drop back to the
   // hardcoded default, defeating cross-page persistence entirely.
   const symbol = useSearchParams().get("symbol");
+  // §18: unobtrusive -- a small count badge, no flashing/animation.
+  const unreadAlertCount = useUnreadAlertCount();
 
   return (
     <header className="border-b border-border bg-surface">
@@ -38,9 +44,15 @@ function TopNavInner() {
               <Link
                 key={item.href}
                 href={href}
-                className={active ? "text-foreground" : "hover:text-foreground"}
+                className={`flex items-center gap-1 ${active ? "text-foreground" : "hover:text-foreground"}`}
               >
                 {item.label}
+                {item.href === "/alerts" && unreadAlertCount > 0 && " "}
+                {item.href === "/alerts" && unreadAlertCount > 0 && (
+                  <span className="rounded-full bg-accent/20 px-1.5 text-[10px] text-accent">
+                    {unreadAlertCount}
+                  </span>
+                )}
               </Link>
             );
           })}

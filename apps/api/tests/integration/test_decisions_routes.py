@@ -215,6 +215,28 @@ def test_replay_strengthen_invalidate_fixture_reaches_invalidated(client):
     ]
 
 
+def test_replay_fixture_emits_alerts_tagged_dev_fixture_origin(client):
+    client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
+
+    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}).json()
+
+    assert len(alerts) > 0
+    assert all(a["origin"] == "dev_fixture" for a in alerts)
+
+
+def test_fixture_replay_route_unreachable_in_production_creates_no_alerts_either(client, monkeypatch):
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        "app.api.routes.decisions.get_settings", lambda: Settings(environment="production")
+    )
+
+    client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
+
+    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}).json()
+    assert alerts == []
+
+
 def test_replay_exit_fixture_reaches_exit_conditions_met(client):
     response = client.post("/api/decisions/_dev/fixtures/exit/replay")
 
@@ -242,3 +264,49 @@ def test_fixture_plans_appear_through_the_same_list_endpoint_the_ui_uses(client)
     plans = response.json()
     assert len(plans) == 1
     assert plans[0]["state"] == "invalidated"
+
+
+# ---------------------------------------------------------------------------
+# Phase 14: cross-symbol Decision Scanner (§9/§36) -- read-only aggregation
+# over whatever plans already exist for the monitored universe.
+# ---------------------------------------------------------------------------
+
+
+def test_scanner_surfaces_a_row_for_a_scanned_symbol_with_a_plan(client):
+    client.post("/api/decisions/SPY/scan", params={"timeframe": "1h"})
+
+    response = client.get("/api/decisions/scanner")
+
+    assert response.status_code == 200
+    rows = response.json()
+    spy_row = next(r for r in rows if r["symbol"] == "SPY")
+    assert spy_row["state"] in (
+        "abstain",
+        "watching",
+        "entry_conditions_met",
+        "active_thesis",
+        "thesis_strengthening",
+        "thesis_weakening",
+        "invalidated",
+        "exit_conditions_met",
+        "expired",
+    )
+
+
+def test_scanner_never_exposes_a_ranking_score_field(client):
+    client.post("/api/decisions/SPY/scan", params={"timeframe": "1h"})
+
+    response = client.get("/api/decisions/scanner")
+
+    rows = response.json()
+    for row in rows:
+        assert "score" not in row
+        assert "rank" not in row
+        assert "expected_return" not in row
+
+
+def test_scanner_route_is_not_shadowed_by_decision_plan_id_path(client):
+    response = client.get("/api/decisions/scanner")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)

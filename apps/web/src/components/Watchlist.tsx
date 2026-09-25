@@ -4,9 +4,25 @@ import { useEffect, useState } from "react";
 
 import { SymbolSearch } from "@/components/SymbolSearch";
 import { ApiError, addWatchlistSymbol, getWatchlist, removeWatchlistSymbol } from "@/lib/api";
+import { useDecisionScanner } from "@/hooks/useDecisionScanner";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
+import { useMonitoringSubscriptions } from "@/hooks/useMonitoring";
 import { formatSignedPercent, freshnessDotClass } from "@/lib/format";
 import type { WatchlistSymbol } from "@/lib/types";
+
+// Compact, non-interactive -- deliberately not the same badge component
+// DecisionPlanCard uses (which includes text + a GlossaryHint button);
+// this is a plain colored dot so it can never be mistaken for something
+// clickable inside a row that already has two real buttons.
+const DECISION_DOT_STYLES: Record<string, string> = {
+  watching: "bg-accent",
+  entry_conditions_met: "bg-positive",
+  active_thesis: "bg-positive",
+  thesis_strengthening: "bg-positive",
+  thesis_weakening: "bg-warning",
+  invalidated: "bg-negative",
+  exit_conditions_met: "bg-negative",
+};
 
 type LoadState = "loading" | "ready" | "error";
 
@@ -83,18 +99,41 @@ export function Watchlist({
         <p className="text-xs text-muted">Watchlist is empty.</p>
       )}
 
-      <ul className="flex flex-col gap-0.5">
-        {symbols.map((s) => (
-          <WatchlistRow
-            key={s.ticker}
-            ticker={s.ticker}
-            selected={s.ticker === selected}
-            onSelect={() => onSelect(s.ticker)}
-            onRemove={() => handleRemove(s.ticker)}
-          />
-        ))}
-      </ul>
+      <WatchlistRows symbols={symbols} selected={selected} onSelect={onSelect} onRemove={handleRemove} />
     </div>
+  );
+}
+
+function WatchlistRows({
+  symbols,
+  selected,
+  onSelect,
+  onRemove,
+}: {
+  symbols: WatchlistSymbol[];
+  selected: string;
+  onSelect: (ticker: string) => void;
+  onRemove: (ticker: string) => void;
+}) {
+  const { rows: scannerRows } = useDecisionScanner();
+  const { isMonitored, toggle } = useMonitoringSubscriptions();
+  const stateBySymbol = new Map(scannerRows.map((r) => [r.symbol, r.state]));
+
+  return (
+    <ul className="flex flex-col gap-0.5">
+      {symbols.map((s) => (
+        <WatchlistRow
+          key={s.ticker}
+          ticker={s.ticker}
+          selected={s.ticker === selected}
+          decisionState={stateBySymbol.get(s.ticker) ?? null}
+          monitored={isMonitored(s.ticker)}
+          onSelect={() => onSelect(s.ticker)}
+          onRemove={() => onRemove(s.ticker)}
+          onToggleMonitoring={() => toggle(s.ticker)}
+        />
+      ))}
+    </ul>
   );
 }
 
@@ -105,15 +144,22 @@ export function Watchlist({
 function WatchlistRow({
   ticker,
   selected,
+  decisionState,
+  monitored,
   onSelect,
   onRemove,
+  onToggleMonitoring,
 }: {
   ticker: string;
   selected: boolean;
+  decisionState: string | null;
+  monitored: boolean;
   onSelect: () => void;
   onRemove: () => void;
+  onToggleMonitoring: () => void;
 }) {
   const { quote } = useLiveSymbol(ticker, ["1h"], "watchlist");
+  const decisionDotClass = decisionState ? DECISION_DOT_STYLES[decisionState] : null;
 
   return (
     <li className="flex items-center justify-between gap-1">
@@ -127,6 +173,15 @@ function WatchlistRow({
         <span className="flex items-center gap-1.5">
           {quote && <span className={`h-1.5 w-1.5 rounded-full ${freshnessDotClass(quote.freshness.freshness_state)}`} />}
           {ticker}
+          {/* Phase 14 §39: compact, non-interactive Decision-state
+              indicator -- a plain dot, never text/a badge, so it can never
+              be mistaken for a third clickable element inside this row. */}
+          {decisionDotClass && (
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${decisionDotClass}`}
+              title={`Decision state: ${decisionState}`}
+            />
+          )}
         </span>
         {quote && (
           <span className="flex items-center gap-1.5 text-[10px]">
@@ -138,6 +193,18 @@ function WatchlistRow({
             )}
           </span>
         )}
+      </button>
+      {/* Sibling of the select/remove buttons, never nested inside either
+          -- clicking it must not navigate or remove the row (§39). */}
+      <button
+        type="button"
+        onClick={onToggleMonitoring}
+        aria-label={monitored ? `Stop monitoring ${ticker}` : `Monitor ${ticker} for alerts`}
+        aria-pressed={monitored}
+        title={monitored ? "Monitoring: on" : "Monitoring: off"}
+        className={`px-1 text-[11px] ${monitored ? "text-accent" : "text-muted hover:text-foreground"}`}
+      >
+        {monitored ? "◉" : "◎"}
       </button>
       <button
         type="button"
