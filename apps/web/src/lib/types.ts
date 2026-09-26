@@ -1926,3 +1926,137 @@ export interface ScannerRow {
   last_change_at: string | null;
   other_monitored_plan_count: number;
 }
+
+// Phase 15: Prospective Validation & Signal Qualification. This is a
+// distinct, separately-versioned gate from ForwardValidationGateEvaluation
+// (which is Forecast-Lab-scoped) -- both can coexist. Never touches the
+// Phase 9 RANKING GATE.
+export type SignalGateDecisionKind = "not_enough_data" | "fail" | "mixed" | "pass";
+
+export interface SignalGateCriteria {
+  min_independent_episodes: number;
+  min_symbols: number;
+  max_single_symbol_share: number;
+  min_observation_days: number;
+  max_cost_bps_for_survival: number;
+  require_cost_survival: boolean;
+  require_historical_agreement: boolean;
+}
+
+export interface SignalGateEvaluation {
+  gate_version: string;
+  decision: SignalGateDecisionKind;
+  reasons: string[];
+  raw_n: number;
+  independent_episode_count: number;
+  purged_n: number;
+  symbol_count: number;
+  observation_days: number | null;
+  max_symbol_share: number | null;
+  median_effect: number | null;
+  cost_adjusted_effect_at_max_bps: number | null;
+  criteria: SignalGateCriteria;
+}
+
+export interface SignalGateHistoryEntry {
+  gate_version: string;
+  decision: SignalGateDecisionKind;
+  reasons: string[];
+  raw_n: number;
+  independent_episode_count: number;
+  symbol_count: number;
+  observation_days: number | null;
+}
+
+export interface ObservationStatus {
+  total: number;
+  resolved: number;
+  unresolved: number;
+}
+
+export interface ProspectiveObservation {
+  observation_id: string;
+  alert_id: string;
+  decision_plan_id: string | null;
+  symbol: string;
+  setup_type: string | null;
+  direction: string | null;
+  timeframe: string | null;
+  decision_state: string | null;
+  event_type: string;
+  alert_occurred_at: string;
+  resolved_at: string | null;
+  return_1: number | null;
+  return_3: number | null;
+  return_5: number | null;
+  return_10: number | null;
+  return_20: number | null;
+  mfe_atr: number | null;
+  mae_atr: number | null;
+  market_regime: string | null;
+  volatility_regime: string | null;
+  origin: "prospective" | "historical_replay";
+  resolved: boolean;
+  resolution_quality: string;
+}
+
+export interface CostSensitivityPoint {
+  cost_bps: number;
+  median_return_after_cost: number | null;
+  mean_return_after_cost: number | null;
+  positive_rate_after_cost: number | null;
+}
+
+export interface ConcentrationWarning {
+  dimension: string;
+  dominant_value: string;
+  share: number;
+  warning: string;
+}
+
+export interface CohortStatistics {
+  cohort_label: string;
+  horizon_bars: number;
+  raw_n: number;
+  independent_n: number;
+  purged_n: number;
+  mean: number | null;
+  median: number | null;
+  stdev: number | null;
+  p25: number | null;
+  p75: number | null;
+  positive_rate: number | null;
+  mfe_atr_median: number | null;
+  mae_atr_median: number | null;
+  invalidation_rate: number | null;
+  exit_rate: number | null;
+  bootstrap_available: boolean;
+  bootstrap_point_estimate: number | null;
+  bootstrap_lower: number | null;
+  bootstrap_upper: number | null;
+  bootstrap_method: string | null;
+  baseline_type: string | null;
+  baseline_median: number | null;
+  effect_vs_baseline: number | null;
+  cost_sensitivity: CostSensitivityPoint[];
+  concentration_warnings: ConcentrationWarning[];
+}
+
+export interface HistoricalProspectiveComparison {
+  cohort_label: string;
+  historical_n: number;
+  historical_median_effect: number | null;
+  prospective_n: number;
+  prospective_median_effect: number | null;
+  direction_agreement: boolean | null;
+  magnitude_agreement: boolean | null;
+  note: string | null;
+}
+
+export interface ValidationSummary {
+  generated_at: string;
+  gate_version: string;
+  decision: SignalGateDecisionKind;
+  text: string;
+  schema_version: string;
+}

@@ -754,6 +754,34 @@ class ForwardValidationGateResultRecord(Base):
     row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class SignalGateVersionRecord(Base):
+    """Phase 15: a versioned, immutable Signal Validation Gate criteria
+    definition -- the Decision/Alert-scoped counterpart of
+    ForwardValidationGateVersionRecord (which is forecast-scoped). A
+    changed threshold always means a new `gate_version` row."""
+
+    __tablename__ = "signal_gate_versions"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    gate_version: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    criteria: Mapped[dict] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class SignalGateResultRecord(Base):
+    """Phase 15: one immutable Signal Validation Gate evaluation run.
+    Never overwritten -- history is preserved (§58/§59)."""
+
+    __tablename__ = "signal_gate_results"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    gate_version: Mapped[str] = mapped_column(String(32), index=True)
+    evaluated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    decision: Mapped[str] = mapped_column(String(32), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 # ---------------------------------------------------------------------------
 # Phase 13: Trader Decision Engine. `DecisionPlanRecord.payload` holds the
 # full current DecisionPlan (state + all four condition lists); the plan row
@@ -903,6 +931,33 @@ class AlertOutcomeRecord(Base):
     id: Mapped[uuid.UUID] = _portable_uuid_pk()
     outcome_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
     alert_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AlertHorizonOutcomeRecord(Base):
+    """Phase 15 (per-horizon resolution): unlike AlertOutcomeRecord (which
+    waits for the full 20-bar window before persisting anything), each of
+    the 1/3/5/10/20-bar horizons for a given alert resolves and persists
+    independently, the instant that horizon's own future bars exist --
+    horizons still awaiting enough future data simply have no row yet
+    (pending), never a fabricated/zero placeholder. `UniqueConstraint
+    (alert_id, horizon_bars)` is the exactly-once mechanism per horizon,
+    mirroring AlertOutcomeRecord's own per-alert uniqueness -- a repeated
+    resolution attempt for the same (alert_id, horizon_bars) is an
+    insert-or-ignore, not a rewrite, so this is restart/concurrency safe."""
+
+    __tablename__ = "alert_horizon_outcomes"
+    __table_args__ = (
+        UniqueConstraint("alert_id", "horizon_bars", name="uq_alert_horizon_outcomes_alert_horizon"),
+    )
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    outcome_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    alert_id: Mapped[str] = mapped_column(String(64), index=True)
+    horizon_bars: Mapped[int] = mapped_column(Integer, index=True)
     symbol: Mapped[str] = mapped_column(String(16), index=True)
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict] = mapped_column(JSON)

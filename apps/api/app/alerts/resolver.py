@@ -27,7 +27,7 @@ from typing import Optional
 
 from app.alerts.prospective import is_prospective_eligible
 from app.alerts.repository import AlertRepository
-from app.alerts.schemas import AlertEvent, AlertOrigin, AlertOutcome
+from app.alerts.schemas import AlertEvent, AlertHorizonOutcome, AlertOrigin, AlertOutcome
 from app.decision_engine.repository import DecisionEngineRepository
 from app.decision_engine.schemas import DecisionState
 from app.market_data.provider import MarketDataProvider
@@ -128,6 +128,101 @@ def resolve_alert_outcome(
         bars_to_adverse_excursion=mae.bars_until,
         pipeline_version=PIPELINE_VERSION,
     )
+
+
+def resolve_alert_horizon_outcomes(
+    alert: AlertEvent,
+    decision_repository: DecisionEngineRepository,
+    alert_repository: AlertRepository,
+    market_provider: MarketDataProvider,
+    *,
+    now: Optional[datetime] = None,
+) -> list[AlertHorizonOutcome]:
+    """Phase 15 per-horizon resolution: unlike resolve_alert_outcome (which
+    blocks on the full 20-bar window), each of the 1/3/5/10/20-bar horizons
+    resolves the instant ITS OWN future bars exist -- a symbol with 6 bars
+    of new data since the alert can already have its 1/3/5-bar horizons
+    resolved while 10/20 remain pending. Already-resolved horizons (per
+    alert_repository.get_horizon_outcomes_for_alert) are skipped, so this
+    is safe to call repeatedly as more bars accumulate. Returns only the
+    NEWLY resolvable horizons for this call; persisting them is the
+    caller's job via AlertRepository.save_horizon_outcome (itself
+    resolve-once per (alert_id, horizon_bars))."""
+    resolved_at = now or datetime.now(timezone.utc)
+
+    if not is_prospective_eligible(alert, decision_repository):
+        return []
+
+    plan = decision_repository.get_plan(alert.decision_plan_id)
+    if plan is None or alert.timeframe is None:
+        return []
+
+    already_resolved = {
+        outcome.horizon_bars for outcome in alert_repository.get_horizon_outcomes_for_alert(alert.alert_id)
+    }
+    pending_horizons = [h for h in _HORIZONS if h not in already_resolved]
+    if not pending_horizons:
+        return []
+
+    all_candles = market_provider.get_candles(alert.symbol, Timeframe(alert.timeframe), limit=50_000)
+    future = forward_candles(all_candles, alert.occurred_at)
+
+    past_or_equal = [c for c in all_candles if c.timestamp <= alert.occurred_at]
+    if not past_or_equal:
+        return []
+    base_candle = max(past_or_equal, key=lambda c: c.timestamp)
+    base_price = base_candle.close
+
+    resolvable = [h for h in pending_horizons if len(future) >= h]
+    if not resolvable:
+        return []  # no newly-resolvable horizon yet -- try again later, never persisted
+
+    horizon_outcomes = compute_horizon_outcomes(future, base_price, plan.direction, resolvable)
+    outcomes: list[AlertHorizonOutcome] = []
+    for horizon_outcome in horizon_outcomes:
+        horizon_bars = horizon_outcome.horizon_bars
+        outcome_id = _outcome_id(f"{alert.alert_id}|{horizon_bars}", resolved_at)
+        outcomes.append(
+            AlertHorizonOutcome(
+                outcome_id=outcome_id,
+                alert_id=alert.alert_id,
+                symbol=alert.symbol,
+                decision_plan_id=alert.decision_plan_id,
+                horizon_bars=horizon_bars,
+                resolved_at=resolved_at,
+                resolution_as_of=future[horizon_bars - 1].timestamp,
+                return_percent=horizon_outcome.directional_return_percent,
+                pipeline_version=PIPELINE_VERSION,
+            )
+        )
+    return outcomes
+
+
+def resolve_pending_horizon_outcomes(
+    alert_repository: AlertRepository,
+    decision_repository: DecisionEngineRepository,
+    market_provider: MarketDataProvider,
+    *,
+    now: Optional[datetime] = None,
+) -> list[AlertHorizonOutcome]:
+    """The per-horizon counterpart of resolve_pending_outcomes: every
+    LIVE_PROSPECTIVE alert with at least one unresolved horizon is
+    attempted; a symbol whose 20-bar horizon isn't ready yet still gets its
+    1/3/5/10-bar horizons persisted as soon as they're independently
+    available. Safe across process restarts and concurrent passes -- each
+    (alert_id, horizon_bars) resolves at most once (save_horizon_outcome's
+    own exactly-once guarantee)."""
+    resolved: list[AlertHorizonOutcome] = []
+    candidates = alert_repository.list_events(origin=AlertOrigin.LIVE_PROSPECTIVE.value, limit=100_000)
+    for alert in candidates:
+        outcomes = resolve_alert_horizon_outcomes(
+            alert, decision_repository, alert_repository, market_provider, now=now
+        )
+        for outcome in outcomes:
+            stored, created = alert_repository.save_horizon_outcome(outcome)
+            if created:
+                resolved.append(stored)
+    return resolved
 
 
 def resolve_pending_outcomes(

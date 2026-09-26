@@ -9,6 +9,7 @@ from __future__ import annotations
 from app.database.models import (
     AlertAcknowledgementRecord,
     AlertEventRecord,
+    AlertHorizonOutcomeRecord,
     AlertOutcomeRecord,
     AlertPreferenceRecord,
     Base,
@@ -18,6 +19,7 @@ from app.database.models import (
 __all__ = [
     "AlertAcknowledgementRecord",
     "AlertEventRecord",
+    "AlertHorizonOutcomeRecord",
     "AlertOutcomeRecord",
     "AlertPreferenceRecord",
     "Base",

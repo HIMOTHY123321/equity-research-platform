@@ -6,7 +6,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from app.alerts.repository import SqlAlchemyAlertRepository
-from app.alerts.resolver import resolve_alert_outcome
+from app.alerts.resolver import resolve_alert_horizon_outcomes, resolve_alert_outcome
 from app.alerts.schemas import AlertEvent, AlertOrigin, AlertSeverity, AlertType
 from app.decision_engine.repository import SqlAlchemyDecisionEngineRepository
 from app.decision_engine.schemas import DecisionState
@@ -150,3 +150,74 @@ def test_bars_to_invalidation_reads_off_the_plans_own_later_transition():
 
     assert outcome is not None
     assert outcome.bars_to_invalidation == 3
+
+
+# ------------------------------------------------------- per-horizon resolution
+
+
+def test_only_horizons_with_enough_future_data_resolve():
+    alert_repo, decision_repo = _repos()
+    decision_repo.save_plan(make_plan(DecisionState.ACTIVE_THESIS))
+    # occurred_at is index 5; only 6 bars follow (indices 6..11) -- enough
+    # for the 1/3/5-bar horizons, not enough for 10 or 20.
+    candles = [_candle(i, 100.0 + i) for i in range(12)]
+    provider = _FakeProvider(candles)
+
+    outcomes = resolve_alert_horizon_outcomes(_alert(), decision_repo, alert_repo, provider)
+
+    resolved_horizons = {o.horizon_bars for o in outcomes}
+    assert resolved_horizons == {1, 3, 5}
+
+
+def test_repeated_calls_only_resolve_newly_available_horizons():
+    alert_repo, decision_repo = _repos()
+    decision_repo.save_plan(make_plan(DecisionState.ACTIVE_THESIS))
+    candles = [_candle(i, 100.0 + i) for i in range(12)]
+    provider = _FakeProvider(candles)
+    alert = _alert()
+
+    first_pass = resolve_alert_horizon_outcomes(alert, decision_repo, alert_repo, provider)
+    for outcome in first_pass:
+        alert_repo.save_horizon_outcome(outcome)
+    assert {o.horizon_bars for o in first_pass} == {1, 3, 5}
+
+    # No new bars arrived -- a second pass must not re-offer already-
+    # resolved horizons (exactly-once per (alert_id, horizon_bars)).
+    second_pass = resolve_alert_horizon_outcomes(alert, decision_repo, alert_repo, provider)
+    assert second_pass == []
+
+    # More bars arrive -- now 10 and 20 become resolvable too, while 1/3/5
+    # are correctly skipped as already-resolved.
+    more_candles = [_candle(i, 100.0 + i) for i in range(31)]
+    provider_more = _FakeProvider(more_candles)
+    third_pass = resolve_alert_horizon_outcomes(alert, decision_repo, alert_repo, provider_more)
+    assert {o.horizon_bars for o in third_pass} == {10, 20}
+
+
+def test_horizon_outcomes_are_never_rewritten_once_saved():
+    alert_repo, decision_repo = _repos()
+    decision_repo.save_plan(make_plan(DecisionState.ACTIVE_THESIS))
+    candles = [_candle(i, 100.0 + i) for i in range(31)]
+    provider = _FakeProvider(candles)
+    alert = _alert()
+
+    outcomes = resolve_alert_horizon_outcomes(alert, decision_repo, alert_repo, provider)
+    one_bar = next(o for o in outcomes if o.horizon_bars == 1)
+    stored_first, created_first = alert_repo.save_horizon_outcome(one_bar)
+    assert created_first is True
+
+    stored_second, created_second = alert_repo.save_horizon_outcome(one_bar)
+    assert created_second is False
+    assert stored_second == stored_first
+
+
+def test_dev_fixture_symbol_never_resolves_any_horizon():
+    alert_repo, decision_repo = _repos()
+    plan = make_plan(DecisionState.ACTIVE_THESIS).model_copy(update={"symbol": "ZFXA"})
+    decision_repo.save_plan(plan)
+    candles = [_candle(i, 100.0 + i) for i in range(31)]
+    provider = _FakeProvider(candles)
+
+    outcomes = resolve_alert_horizon_outcomes(_alert(symbol="ZFXA"), decision_repo, alert_repo, provider)
+
+    assert outcomes == []

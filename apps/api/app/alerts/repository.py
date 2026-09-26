@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session
 from app.alerts.models import (
     AlertAcknowledgementRecord,
     AlertEventRecord,
+    AlertHorizonOutcomeRecord,
     AlertOutcomeRecord,
     AlertPreferenceRecord,
     Base,
@@ -30,6 +31,7 @@ from app.alerts.models import (
 from app.alerts.prospective import is_prospective_eligible
 from app.alerts.schemas import (
     AlertEvent,
+    AlertHorizonOutcome,
     AlertOutcome,
     AlertPreference,
     AlertType,
@@ -115,6 +117,19 @@ class AlertRepository(ABC):
     @abstractmethod
     def get_outcome_for_alert(self, alert_id: str) -> Optional[AlertOutcome]: ...
 
+    @abstractmethod
+    def save_horizon_outcome(self, outcome: AlertHorizonOutcome) -> tuple[AlertHorizonOutcome, bool]:
+        """Resolve-once per (alert_id, horizon_bars): returns
+        (stored_outcome, created), mirroring save_outcome's own contract
+        one horizon at a time."""
+        ...
+
+    @abstractmethod
+    def get_horizon_outcomes_for_alert(self, alert_id: str) -> list[AlertHorizonOutcome]:
+        """Only the horizons already resolved for this alert -- a missing
+        horizon means pending, never a fabricated value."""
+        ...
+
 
 class SqlAlchemyAlertRepository(AlertRepository):
     def __init__(self, session: Session) -> None:
@@ -127,6 +142,7 @@ class SqlAlchemyAlertRepository(AlertRepository):
                 AlertPreferenceRecord.__table__,
                 MonitoringSubscriptionRecord.__table__,
                 AlertOutcomeRecord.__table__,
+                AlertHorizonOutcomeRecord.__table__,
             ],
             checkfirst=True,
         )
@@ -338,3 +354,43 @@ class SqlAlchemyAlertRepository(AlertRepository):
             select(AlertOutcomeRecord).where(AlertOutcomeRecord.alert_id == alert_id)
         ).scalar_one_or_none()
         return AlertOutcome.model_validate(row.payload) if row is not None else None
+
+    def save_horizon_outcome(self, outcome: AlertHorizonOutcome) -> tuple[AlertHorizonOutcome, bool]:
+        existing = self._session.execute(
+            select(AlertHorizonOutcomeRecord).where(
+                AlertHorizonOutcomeRecord.alert_id == outcome.alert_id,
+                AlertHorizonOutcomeRecord.horizon_bars == outcome.horizon_bars,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            return AlertHorizonOutcome.model_validate(existing.payload), False
+
+        row = AlertHorizonOutcomeRecord(
+            outcome_id=outcome.outcome_id,
+            alert_id=outcome.alert_id,
+            horizon_bars=outcome.horizon_bars,
+            symbol=outcome.symbol,
+            resolved_at=outcome.resolved_at,
+            payload=outcome.model_dump(mode="json"),
+        )
+        self._session.add(row)
+        try:
+            self._session.commit()
+        except IntegrityError:
+            self._session.rollback()
+            existing = self._session.execute(
+                select(AlertHorizonOutcomeRecord).where(
+                    AlertHorizonOutcomeRecord.alert_id == outcome.alert_id,
+                    AlertHorizonOutcomeRecord.horizon_bars == outcome.horizon_bars,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                return AlertHorizonOutcome.model_validate(existing.payload), False
+            raise
+        return outcome, True
+
+    def get_horizon_outcomes_for_alert(self, alert_id: str) -> list[AlertHorizonOutcome]:
+        rows = self._session.execute(
+            select(AlertHorizonOutcomeRecord).where(AlertHorizonOutcomeRecord.alert_id == alert_id)
+        ).scalars()
+        return [AlertHorizonOutcome.model_validate(row.payload) for row in rows]

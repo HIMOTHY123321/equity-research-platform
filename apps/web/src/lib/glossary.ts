@@ -24,7 +24,8 @@ export type GlossaryCategoryId =
   | "live_market_data"
   | "risk_trade_management"
   | "decision_engine"
-  | "alerts_monitoring";
+  | "alerts_monitoring"
+  | "prospective_validation";
 
 export interface GlossaryCategory {
   id: GlossaryCategoryId;
@@ -45,6 +46,7 @@ export const GLOSSARY_CATEGORIES: GlossaryCategory[] = [
   { id: "risk_trade_management", label: "Risk / Trade Management" },
   { id: "decision_engine", label: "Decision Engine" },
   { id: "alerts_monitoring", label: "Alerts & Monitoring" },
+  { id: "prospective_validation", label: "Prospective Validation" },
 ];
 
 export interface GlossaryTermEntry {
@@ -1000,10 +1002,10 @@ export const GLOSSARY_TERMS: GlossaryTermEntry[] = [
     id: "forward-validation-gate",
     term: "Forward Validation Gate",
     category: "forecasting",
-    shortDefinition: "A hard requirement that a forecasting approach must be validated using only past-available data, walk-forward, before it can be treated as production-ready.",
-    whyItMatters: "Prevents an approach that only looks good with hindsight from being trusted going forward.",
-    howDeskUsesIt: "One of the desk's core integrity gates -- see also Ranking Gate for the setup/analog equivalent.",
-    related: ["walk-forward-validation"],
+    shortDefinition: "A hard requirement that a research approach must be validated using only past-available data, walk-forward, before it can be treated as qualified. Applied separately to Forecast Lab forecasts and to Validation Lab Decision/Alert signals -- two distinctly-versioned gates sharing the same underlying discipline, never combined into one evaluation.",
+    whyItMatters: "Prevents an approach that only looks good with hindsight from being trusted going forward, and a handful of successful observations from looking like proof.",
+    howDeskUsesIt: "One of the desk's core integrity gates -- see also Ranking Gate for the setup/analog equivalent. The Validation Lab shows the signal-scoped gate's exact NOT ENOUGH DATA/FAIL/MIXED/PASS reasons; it never sets itself to PASS just because the other gate improves.",
+    related: ["walk-forward-validation", "gate-version", "ranking-gate"],
   },
 
   // ---- H. Catalysts & News --------------------------------------------------
@@ -1620,6 +1622,78 @@ export const GLOSSARY_TERMS: GlossaryTermEntry[] = [
     whyItMatters: "Dev fixtures and historical replay can never count as a prospective observation -- only alerts generated from real, live market evaluation are eligible, so Forward Validation sample counts stay honest.",
     howDeskUsesIt: "Gated entirely by the alert's origin field; the Forward Validation Gate's sample counts only ever grow from this category.",
     related: ["alert-event"],
+  },
+  {
+    id: "forward-validation",
+    term: "Forward Validation",
+    category: "prospective_validation",
+    shortDefinition: "Testing whether Decision Engine states have genuine forward predictive value, using only observations collected after live monitoring began.",
+    whyItMatters: "A backtest can be overfit to its own history; forward validation only counts what actually happened after the system started watching, which is a much harder bar to pass.",
+    howDeskUsesIt: "Powers the Validation Lab's cohort statistics, baselines, and the Forward Validation Gate.",
+    related: ["forward-validation-gate", "prospective-observation"],
+  },
+  {
+    id: "gate-version",
+    term: "Gate Version",
+    category: "prospective_validation",
+    shortDefinition: "An immutable identifier for one specific set of gate criteria (thresholds). Changing a threshold always means defining a new version, never editing an old one.",
+    whyItMatters: "A past PASS/FAIL decision always stays interpretable against the exact rules that produced it, even if criteria are tightened or loosened later.",
+    howDeskUsesIt: "Stored alongside every Forward Validation Gate evaluation in its history.",
+    related: ["forward-validation-gate"],
+  },
+  {
+    id: "unconditional-baseline",
+    term: "Unconditional Baseline",
+    category: "prospective_validation",
+    shortDefinition: "The simplest matched baseline: returns from random eligible timestamps on the same symbol/timeframe, with no other conditioning.",
+    whyItMatters: "Establishes the minimum bar -- a cohort that can't beat its own symbol's unconditional behavior has no demonstrated edge.",
+    howDeskUsesIt: "One of several baseline types shown alongside cohort statistics.",
+    related: ["matched-baseline"],
+  },
+  {
+    id: "effect-size",
+    term: "Effect Size",
+    category: "prospective_validation",
+    shortDefinition: "How large a difference actually is (e.g. median return difference versus baseline), reported alongside -- never instead of -- any confidence interval.",
+    whyItMatters: "A statistically detectable effect can still be too small to matter; the desk needs to see the magnitude, not just whether a test cleared a significance threshold.",
+    howDeskUsesIt: "Shown as the effect-versus-baseline figure in every cohort's statistics.",
+    related: ["matched-baseline"],
+  },
+  {
+    id: "cost-sensitivity",
+    term: "Cost Sensitivity",
+    category: "prospective_validation",
+    shortDefinition: "An estimated-cost-assumption sensitivity table (e.g. 0/2/5/10/20 bps) showing how much of an observed effect survives after a hypothetical spread/slippage/fee haircut.",
+    whyItMatters: "A real edge should survive reasonable transaction cost assumptions; an edge that vanishes under a 5-10bps haircut was likely never tradeable in practice.",
+    howDeskUsesIt: "Labeled 'ESTIMATED COST SENSITIVITY' everywhere it appears -- it is a research assumption, never an actual fill simulation or real P&L.",
+    related: ["forward-validation-gate"],
+  },
+  {
+    id: "historical-vs-prospective",
+    term: "Historical vs Prospective",
+    category: "prospective_validation",
+    shortDefinition: "A side-by-side comparison of a cohort's historical-replay effect and its genuine prospective (live-monitored) effect -- never averaged or combined into one number.",
+    whyItMatters: "A historical result that doesn't hold up prospectively is a warning sign of overfitting; keeping the two visibly separate prevents quietly papering over that disagreement.",
+    howDeskUsesIt: "Shown in the Validation Lab with explicit n and median-effect for both sides, plus a direction-agreement flag.",
+    related: ["forward-validation"],
+  },
+  {
+    id: "resolution-quality",
+    term: "Resolution Quality",
+    category: "prospective_validation",
+    shortDefinition: "A per-observation status (VALID, PARTIAL, INSUFFICIENT_FUTURE_DATA, DATA_GAP, STALE_SOURCE, UNSUPPORTED, INVALID) describing how trustworthy a resolved outcome is.",
+    whyItMatters: "Missing future data is never silently treated as a zero return -- an observation without enough future bars yet is explicitly INSUFFICIENT_FUTURE_DATA, not a fabricated flat outcome.",
+    howDeskUsesIt: "Attached to every prospective observation; low-quality observations can be excluded from cohort statistics rather than quietly pulling results toward zero.",
+    related: ["prospective-observation"],
+  },
+  {
+    id: "replication-status",
+    term: "Replication Status",
+    category: "prospective_validation",
+    shortDefinition: "A rule-based (never AI-assigned) label describing how consistently an effect has repeated: NOT ENOUGH DATA, EARLY SIGNAL, MIXED, NOT REPLICATED, REPLICATED, DEGRADED, or CONTRADICTED.",
+    whyItMatters: "Keeps qualification language honest and mechanical -- no model ever gets to decide a signal 'works.'",
+    howDeskUsesIt: "Computed deterministically from stability/concentration/cost-survival checks, shown next to cohort results.",
+    related: ["forward-validation-gate"],
   },
 ];
 

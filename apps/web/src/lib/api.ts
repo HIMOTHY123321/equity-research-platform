@@ -8,6 +8,7 @@ import type {
   CatalystEvent,
   CatalystEventDetail,
   CatalystResearchQueryResponse,
+  CohortStatistics,
   DecisionEvidencePacket,
   DecisionExplanations,
   DecisionPlan,
@@ -20,27 +21,33 @@ import type {
   ForecastPerformanceResponse,
   ForwardForecast,
   ForwardValidationGateEvaluation,
+  HistoricalProspectiveComparison,
   LedgerEntriesResponse,
   LiveStatusResponse,
   MarketReaction,
   MarketStructureSnapshot,
   MonitoringSubscription,
   NormalizedNewsArticle,
+  ObservationStatus,
   ResearchBrief,
   ResearchQueryResponse,
   ResearchRun,
   ResearchRunSummary,
   ResearchSnapshot,
+  ProspectiveObservation,
   ScannerRow,
   SetupCandidate,
   SetupCatalystContext,
   SetupDetectionSnapshot,
+  SignalGateEvaluation,
+  SignalGateHistoryEntry,
   SnapshotComparison,
   SupportResistanceSnapshot,
   SymbolMatch,
   SymbolSearchResponse,
   Timeframe,
   UniverseReplayResponse,
+  ValidationSummary,
   WatchlistSymbol,
   WhatsMovingResponse,
 } from "@/lib/types";
@@ -570,4 +577,82 @@ export function disableMonitoring(symbol: string): Promise<void> {
 
 export function getDecisionScanner(): Promise<ScannerRow[]> {
   return request<ScannerRow[]>(`/api/decisions/scanner`);
+}
+
+// Phase 15: Prospective Validation & Signal Qualification. Research only
+// -- no route in this group ever returns a BUY/SELL, probability, or
+// confidence-score field.
+
+export function getValidationStatus(): Promise<ObservationStatus> {
+  return request<ObservationStatus>(`/api/validation/status`);
+}
+
+export function getSignalGate(timeframe: Timeframe = "1h"): Promise<SignalGateEvaluation> {
+  return request<SignalGateEvaluation>(`/api/validation/gate?timeframe=${timeframe}`);
+}
+
+export function getSignalGateHistory(limit = 50): Promise<SignalGateHistoryEntry[]> {
+  return request<SignalGateHistoryEntry[]>(`/api/validation/gate/history?limit=${limit}`);
+}
+
+export function getProspectiveObservations(params: {
+  symbol?: string;
+  setupType?: string;
+  direction?: string;
+  timeframe?: string;
+  eventType?: string;
+  resolvedOnly?: boolean;
+} = {}): Promise<ProspectiveObservation[]> {
+  const query = new URLSearchParams();
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.setupType) query.set("setup_type", params.setupType);
+  if (params.direction) query.set("direction", params.direction);
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.eventType) query.set("event_type", params.eventType);
+  if (params.resolvedOnly) query.set("resolved_only", "true");
+  const qs = query.toString();
+  return request<ProspectiveObservation[]>(`/api/validation/observations${qs ? `?${qs}` : ""}`);
+}
+
+export function getValidationCohort(params: {
+  eventType: string;
+  horizonBars?: number;
+  timeframe?: Timeframe;
+  symbol?: string;
+  setupType?: string;
+  direction?: string;
+}): Promise<CohortStatistics> {
+  const query = new URLSearchParams({ event_type: params.eventType });
+  if (params.horizonBars) query.set("horizon_bars", String(params.horizonBars));
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.symbol) query.set("symbol", params.symbol);
+  if (params.setupType) query.set("setup_type", params.setupType);
+  if (params.direction) query.set("direction", params.direction);
+  return request<CohortStatistics>(`/api/validation/cohorts?${query.toString()}`);
+}
+
+export function getHistoricalComparison(params: {
+  symbol: string;
+  setupType: string;
+  direction: string;
+  horizonBars?: number;
+}): Promise<HistoricalProspectiveComparison> {
+  const query = new URLSearchParams({
+    symbol: params.symbol,
+    setup_type: params.setupType,
+    direction: params.direction,
+  });
+  if (params.horizonBars) query.set("horizon_bars", String(params.horizonBars));
+  return request<HistoricalProspectiveComparison>(`/api/validation/historical-comparison?${query.toString()}`);
+}
+
+export function getValidationSummary(params: {
+  timeframe?: Timeframe;
+  horizonBars?: number;
+} = {}): Promise<ValidationSummary> {
+  const query = new URLSearchParams();
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.horizonBars) query.set("horizon_bars", String(params.horizonBars));
+  const qs = query.toString();
+  return request<ValidationSummary>(`/api/validation/summary${qs ? `?${qs}` : ""}`);
 }

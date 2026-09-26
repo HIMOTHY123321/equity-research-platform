@@ -25,7 +25,7 @@ from typing import Callable, Optional
 from sqlalchemy.orm import Session
 
 from app.alerts.repository import SqlAlchemyAlertRepository
-from app.alerts.resolver import resolve_pending_outcomes
+from app.alerts.resolver import resolve_pending_horizon_outcomes, resolve_pending_outcomes
 from app.alerts.schemas import AlertOrigin, AlertType
 from app.alerts.service import AlertEventBus, AlertService
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
@@ -250,6 +250,17 @@ class MonitoringService:
                 )
             except Exception:  # noqa: BLE001 -- deliberate: resolution failures must not crash the loop
                 logger.exception("Prospective outcome resolution pass failed")
+
+            # Phase 15: independent per-horizon resolution runs alongside
+            # the all-or-nothing pass above -- a symbol that hasn't yet
+            # accumulated the full 20-bar window can still have its
+            # 1/3/5/10-bar horizons resolved and persisted here.
+            try:
+                resolve_pending_horizon_outcomes(
+                    alert_repository, decision_repository, self._market_provider, now=as_of
+                )
+            except Exception:  # noqa: BLE001 -- deliberate: resolution failures must not crash the loop
+                logger.exception("Prospective per-horizon outcome resolution pass failed")
 
             return transitions
         finally:

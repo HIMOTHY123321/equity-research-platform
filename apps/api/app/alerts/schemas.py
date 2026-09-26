@@ -291,3 +291,33 @@ class AlertOutcome(BaseModel):
 
     schema_version: str = "1.0"
     pipeline_version: str
+
+
+class AlertHorizonOutcome(BaseModel):
+    """Phase 15: one independently-resolved horizon (1, 3, 5, 10, or 20
+    bars) for one eligible prospective AlertEvent. Unlike AlertOutcome
+    (which waits for all 20 bars before persisting anything), this
+    resolves and persists the instant ITS OWN horizon's future bars exist
+    -- a still-pending horizon simply has no row (see
+    AlertRepository.get_horizon_outcomes_for_alert), never a fabricated
+    value. Never rewritten once created: enforced via a UNIQUE constraint
+    on (alert_id, horizon_bars), the same resolve-once discipline as
+    AlertOutcome itself."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome_id: str
+    alert_id: str
+    symbol: str
+    decision_plan_id: Optional[str] = None
+    horizon_bars: int
+
+    resolved_at: datetime
+    resolution_as_of: datetime
+    """The latest real market instant this horizon's return was computed
+    against -- the anti-lookahead proof point for this horizon alone."""
+
+    return_percent: float
+
+    schema_version: str = "1.0"
+    pipeline_version: str
