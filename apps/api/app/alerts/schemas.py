@@ -240,3 +240,54 @@ class MonitoringSubscription(BaseModel):
     preferred_timeframes: list[str] = []
     decision_monitoring_enabled: bool = True
     added_at: datetime
+
+
+class AlertOutcome(BaseModel):
+    """The resolved, future-data-informed outcome of one eligible
+    prospective AlertEvent (§33, Phase 14.1). Produced ONLY by
+    app.alerts.resolver -- the one place in this package allowed to look at
+    candles after `alert.occurred_at` (same discipline as
+    app.forecasting.resolver / app.research.outcomes). Never rewritten once
+    created: a re-resolution attempt is a no-op (see
+    AlertRepository.save_outcome's insert-or-ignore contract), enforced at
+    the database layer via a UNIQUE constraint on `alert_id`, not merely by
+    convention."""
+
+    model_config = ConfigDict(frozen=True)
+
+    outcome_id: str
+    alert_id: str
+    symbol: str
+    decision_plan_id: Optional[str] = None
+
+    resolved_at: datetime
+    """When this outcome was computed -- distinct from `resolution_as_of`."""
+    resolution_as_of: datetime
+    """The latest real market instant this outcome's future-data lookups
+    were truncated to -- the anti-lookahead proof point."""
+
+    # 1/3/5/10/20-bar directional returns (None when that horizon's bars
+    # aren't available yet -- never fabricated).
+    return_1_bar_percent: Optional[float] = None
+    return_3_bar_percent: Optional[float] = None
+    return_5_bar_percent: Optional[float] = None
+    return_10_bar_percent: Optional[float] = None
+    return_20_bar_percent: Optional[float] = None
+
+    mfe_atr: Optional[float] = None
+    mfe_bars_until: Optional[int] = None
+    mae_atr: Optional[float] = None
+    mae_bars_until: Optional[int] = None
+
+    bars_to_invalidation: Optional[int] = None
+    """None if the plan never reached INVALIDATED within the resolved
+    window -- never inferred, only read off an already-persisted, later
+    INVALIDATED transition for the same decision_plan_id."""
+    bars_to_exit: Optional[int] = None
+    bars_to_favorable_excursion: Optional[int] = None
+    """Alias of mfe_bars_until, kept as its own named field per §33's
+    explicit "time to favorable excursion" requirement."""
+    bars_to_adverse_excursion: Optional[int] = None
+
+    schema_version: str = "1.0"
+    pipeline_version: str

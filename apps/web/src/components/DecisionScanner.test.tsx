@@ -106,4 +106,29 @@ describe("DecisionScanner", () => {
 
     await waitFor(() => expect(screen.getByText(/no monitored symbols/i)).toBeInTheDocument());
   });
+
+  // Phase 14.1 regression: without `&timeframe=`, the linked plan's own
+  // timeframe almost never matches whatever Overview happens to have
+  // selected, so MarketWorkspace never even fetches it and the highlight
+  // silently never renders (see MarketWorkspace.tsx / AlertCard.tsx).
+  it("the Open link carries the plan's own timeframe alongside symbol and decision", async () => {
+    vi.spyOn(api, "getDecisionScanner").mockResolvedValue(ROWS);
+
+    render(<DecisionScanner />);
+    await waitFor(() => expect(screen.getByText("SPY")).toBeInTheDocument());
+
+    const links = screen.getAllByRole("link", { name: "Open →" });
+    expect(links[0]).toHaveAttribute("href", "/?symbol=SPY&decision=plan-spy&timeframe=1h");
+  });
+
+  it("a row with no decision plan links to the symbol alone, with no timeframe param", async () => {
+    vi.spyOn(api, "getDecisionScanner").mockResolvedValue(ROWS);
+
+    render(<DecisionScanner />);
+    await waitFor(() => expect(screen.getByText("AAPL")).toBeInTheDocument());
+
+    const aaplRow = screen.getByText("AAPL").closest("tr")!;
+    const link = aaplRow.querySelector("a")!;
+    expect(link).toHaveAttribute("href", "/?symbol=AAPL");
+  });
 });

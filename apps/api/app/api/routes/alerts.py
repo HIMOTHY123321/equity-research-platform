@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.alerts.repository import AlertRepository, SqlAlchemyAlertRepository
 from app.alerts.schemas import DEFAULT_ALERT_PREFERENCES, AlertEvent, AlertPreference, AlertType
 from app.database.session import get_db
+from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
 
 router = APIRouter(prefix="/api/alerts", tags=["alerts"])
 
@@ -21,15 +22,23 @@ def _alert_repository(db: Session = Depends(get_db)) -> AlertRepository:
     return SqlAlchemyAlertRepository(db)
 
 
+def _decision_repository(db: Session = Depends(get_db)) -> DecisionEngineRepository:
+    return SqlAlchemyDecisionEngineRepository(db)
+
+
 class UnreadCountResponse(BaseModel):
     count: int
 
 
 class ProspectiveCountResponse(BaseModel):
     count: int
-    """§33/§34: genuine, post-deployment prospective observations only --
-    never incremented by dev-fixture or historical-replay alerts, see
-    app.alerts.prospective.is_prospective_eligible."""
+    """§33/§34: genuine, post-deployment, provenance-verified prospective
+    observations -- never incremented by dev-fixture/historical-replay/
+    synthetic alerts, see app.alerts.prospective.is_prospective_eligible."""
+    resolved: int
+    """§Phase-14.1-5: of `count`, how many have an actual resolved outcome
+    (app.alerts.resolver) -- creating an eligible alert alone never
+    increments this, only a completed resolution does."""
 
 
 class AcknowledgeAllResponse(BaseModel):
@@ -71,8 +80,12 @@ def get_unread_count(
 @router.get("/prospective-count", response_model=ProspectiveCountResponse)
 def get_prospective_count(
     repository: AlertRepository = Depends(_alert_repository),
+    decision_repository: DecisionEngineRepository = Depends(_decision_repository),
 ) -> ProspectiveCountResponse:
-    return ProspectiveCountResponse(count=repository.count_prospective_observations())
+    return ProspectiveCountResponse(
+        count=repository.count_prospective_observations(decision_repository),
+        resolved=repository.count_resolved_prospective_observations(decision_repository),
+    )
 
 
 @router.get("/preferences", response_model=list[AlertPreference])

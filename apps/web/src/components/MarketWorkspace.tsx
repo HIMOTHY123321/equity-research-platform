@@ -32,7 +32,11 @@ import { useLiveFollow } from "@/hooks/useLiveFollow";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
 import { DEFAULT_RANGE, limitForRange, resolveRangeCompatibility, type ChartRange } from "@/lib/chartRanges";
-import type { Timeframe } from "@/lib/types";
+import { TIMEFRAMES, type Timeframe } from "@/lib/types";
+
+function isTimeframe(value: string | null): value is Timeframe {
+  return value !== null && (TIMEFRAMES as readonly string[]).includes(value);
+}
 
 /**
  * Owns every market-data request for the selected symbol/timeframe exactly
@@ -68,9 +72,11 @@ import type { Timeframe } from "@/lib/types";
 function SymbolUrlWatcher({
   onChange,
   onDecisionChange,
+  onTimeframeChange,
 }: {
   onChange: (symbol: string | null) => void;
   onDecisionChange: (decisionPlanId: string | null) => void;
+  onTimeframeChange: (timeframe: string | null) => void;
 }) {
   const searchParams = useSearchParams();
   const symbol = searchParams.get("symbol");
@@ -79,27 +85,48 @@ function SymbolUrlWatcher({
   // isolated-leaf pattern as `symbol` above, so it costs nothing extra on
   // first paint.
   const decisionPlanId = searchParams.get("decision");
+  // Phase 14.1: `?timeframe=<tf>` (paired with `?decision=`) so the linked
+  // plan's own timeframe is what's actually fetched/displayed -- without
+  // this, the plan almost never matches whatever timeframe happens to be
+  // selected and the highlight above silently never renders.
+  const timeframeParam = searchParams.get("timeframe");
   useEffect(() => {
     onChange(symbol);
   }, [symbol, onChange]);
   useEffect(() => {
     onDecisionChange(decisionPlanId);
   }, [decisionPlanId, onDecisionChange]);
+  useEffect(() => {
+    onTimeframeChange(timeframeParam);
+  }, [timeframeParam, onTimeframeChange]);
   return null;
 }
 
-export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
+export function MarketWorkspace({
+  defaultSymbol,
+  defaultTimeframe = "1d",
+}: {
+  defaultSymbol: string;
+  defaultTimeframe?: Timeframe;
+}) {
   const [urlSymbol, setUrlSymbol] = useState<string | null>(null);
   const [urlDecisionPlanId, setUrlDecisionPlanId] = useState<string | null>(null);
+  const [urlTimeframe, setUrlTimeframe] = useState<string | null>(null);
   return (
     <>
       <Suspense fallback={null}>
-        <SymbolUrlWatcher onChange={setUrlSymbol} onDecisionChange={setUrlDecisionPlanId} />
+        <SymbolUrlWatcher
+          onChange={setUrlSymbol}
+          onDecisionChange={setUrlDecisionPlanId}
+          onTimeframeChange={setUrlTimeframe}
+        />
       </Suspense>
       <MarketWorkspaceInner
         defaultSymbol={defaultSymbol}
+        defaultTimeframe={defaultTimeframe}
         urlSymbol={urlSymbol}
         highlightDecisionPlanId={urlDecisionPlanId}
+        urlTimeframe={urlTimeframe}
       />
     </>
   );
@@ -107,12 +134,16 @@ export function MarketWorkspace({ defaultSymbol }: { defaultSymbol: string }) {
 
 function MarketWorkspaceInner({
   defaultSymbol,
+  defaultTimeframe,
   urlSymbol,
   highlightDecisionPlanId,
+  urlTimeframe,
 }: {
   defaultSymbol: string;
+  defaultTimeframe: Timeframe;
   urlSymbol: string | null;
   highlightDecisionPlanId: string | null;
+  urlTimeframe: string | null;
 }) {
   const router = useRouter();
   // (#5/#9) Derived from the URL (server-set on first load via `defaultSymbol`,
@@ -136,7 +167,19 @@ function MarketWorkspaceInner({
     },
     [router],
   );
-  const [timeframe, setTimeframe] = useState<Timeframe>("1d");
+  // Phase 14.1: URL-derived exactly like `symbol` above (same reasoning:
+  // a real history entry per change, and a `?timeframe=` deep link needs
+  // to drive the initial fetch/render directly rather than only ever
+  // reading from local state that starts at a hardcoded default).
+  const timeframe: Timeframe = isTimeframe(urlTimeframe) ? urlTimeframe : defaultTimeframe;
+  const setTimeframe = useCallback(
+    (next: Timeframe) => {
+      const params = new URLSearchParams(window.location.search);
+      params.set("timeframe", next);
+      router.push(`?${params.toString()}`, { scroll: false });
+    },
+    [router],
+  );
   const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
   const [realTimeMode, setRealTimeMode] = useState(false);

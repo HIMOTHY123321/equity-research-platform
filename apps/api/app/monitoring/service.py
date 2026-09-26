@@ -19,18 +19,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from sqlalchemy.orm import Session
 
 from app.alerts.repository import SqlAlchemyAlertRepository
-from app.alerts.schemas import AlertOrigin
+from app.alerts.resolver import resolve_pending_outcomes
+from app.alerts.schemas import AlertOrigin, AlertType
 from app.alerts.service import AlertEventBus, AlertService
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
 from app.decision_engine.schemas import DecisionTransition
 from app.decision_engine.service import run_symbol_scan
-from app.live.config import DEFAULT_LIVE_CONFIG, LiveConfig
+from app.live.config import DEFAULT_LIVE_CONFIG, FreshnessState, LiveConfig, classify_freshness
+from app.live.market_hours import current_live_session
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.universe import MonitoringUniverse
 from app.schemas.market_data import Timeframe
@@ -97,6 +99,14 @@ class MonitoringService:
         self._listeners: list[
             "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]"
         ] = []
+        # §6: transition-based, in-process memory of each symbol's last
+        # observed freshness state. Deliberately NOT persisted -- after a
+        # restart this starts empty again, and the first observation for a
+        # symbol only ever seeds the cache (never alerts), so a symbol that
+        # was already stale before restart does not get a duplicate
+        # DATA_STALE the moment the process comes back up. The DB dedup key
+        # (time-bucketed) is the secondary, persisted safety net.
+        self._freshness_by_symbol: dict[str, FreshnessState] = {}
 
     def add_listener(self) -> "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]":
         queue: "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]" = asyncio.Queue()
@@ -112,6 +122,56 @@ class MonitoringService:
     def _emit(self, event) -> None:
         for queue in list(self._listeners):
             queue.put_nowait(event)
+
+    def _check_freshness_transition(
+        self, symbol: str, snapshot, as_of: datetime, alert_service: AlertService
+    ) -> None:
+        """§28: DATA_STALE emitted once on the fresh->stale transition,
+        DATA_RECOVERED once on stale->fresh -- reuses the exact same
+        deterministic `classify_freshness` every other live-data surface
+        uses (app.live.config), never a second freshness judgment call."""
+        latest_candle = snapshot.feature_snapshot.latest_candle if snapshot.feature_snapshot else None
+        if latest_candle is None:
+            return
+        age_seconds = max((as_of - latest_candle.timestamp).total_seconds(), 0.0)
+        session = current_live_session(as_of)
+        current_state = classify_freshness(age_seconds, connected=True, session=session, config=self._config)
+
+        previous_state = self._freshness_by_symbol.get(symbol)
+        self._freshness_by_symbol[symbol] = current_state
+        if previous_state is None or previous_state == current_state:
+            return
+
+        # A short cooldown, not the default 1-hour one: the transition
+        # check above is the real throttle (only ever called on an actual
+        # fresh<->stale crossing), so the dedup key here only needs to
+        # guard against re-emitting the exact same instant twice, never
+        # collapse two genuinely separate stale episodes within the hour.
+        transition_cooldown = timedelta(seconds=1)
+        if current_state == FreshnessState.STALE and previous_state != FreshnessState.STALE:
+            alert_service.emit_condition_alert(
+                symbol=symbol,
+                alert_type=AlertType.DATA_STALE,
+                identity="freshness",
+                title="Data stale",
+                summary=f"{symbol} market data has not refreshed within the expected window.",
+                source_timestamp=as_of,
+                origin=AlertOrigin.LIVE_PROSPECTIVE,
+                data_freshness_state=current_state.value,
+                cooldown=transition_cooldown,
+            )
+        elif previous_state == FreshnessState.STALE and current_state != FreshnessState.STALE:
+            alert_service.emit_condition_alert(
+                symbol=symbol,
+                alert_type=AlertType.DATA_RECOVERED,
+                identity="freshness",
+                title="Data recovered",
+                summary=f"{symbol} market data has resumed refreshing normally.",
+                source_timestamp=as_of,
+                origin=AlertOrigin.LIVE_PROSPECTIVE,
+                data_freshness_state=current_state.value,
+                cooldown=transition_cooldown,
+            )
 
     def scan_symbol_once(
         self,
@@ -135,6 +195,7 @@ class MonitoringService:
             return []
 
         self._emit(MonitorStatusEvent(symbol=symbol, status="ok", detail="scan completed", at=self._now()))
+        self._check_freshness_transition(symbol, result.snapshot, as_of, alert_service)
 
         plan_by_id = {p.decision_plan_id: p for p in result.plans}
         all_transitions = [
@@ -176,6 +237,20 @@ class MonitoringService:
                     transitions.extend(
                         self.scan_symbol_once(symbol, timeframe, as_of, decision_repository, alert_service)
                     )
+
+            # §33/§Phase-14.1-3: every pass also attempts to resolve any
+            # eligible prospective alert that doesn't have an outcome yet --
+            # the only place future data enters this package. Failures here
+            # (e.g. a provider error resolving one alert) must not prevent
+            # the rest of the monitoring pass from having already
+            # completed above, so they're caught and logged, never raised.
+            try:
+                resolve_pending_outcomes(
+                    alert_repository, decision_repository, self._market_provider, now=as_of
+                )
+            except Exception:  # noqa: BLE001 -- deliberate: resolution failures must not crash the loop
+                logger.exception("Prospective outcome resolution pass failed")
+
             return transitions
         finally:
             session.close()

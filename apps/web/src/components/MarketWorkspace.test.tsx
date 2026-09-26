@@ -114,4 +114,44 @@ describe("MarketWorkspace <-> sidebar Watchlist wiring (regression)", () => {
     render(<MarketWorkspace defaultSymbol="AAPL" />);
     expect(screen.getByRole("heading", { name: "AAPL" })).toBeInTheDocument();
   });
+
+  // Phase 14.1 regression: an Alert/Scanner deep link
+  // (`/?symbol=X&decision=Y&timeframe=Z`) must open directly on the linked
+  // DecisionPlan's own timeframe. Before this fix, `timeframe` was pure
+  // local state hardcoded to "1d", so a 1h-plan deep link silently fetched
+  // 1d plans instead -- the linked plan was never even in the response,
+  // and the highlight in DecisionMonitorPanel had nothing to match against.
+  it("a ?timeframe= deep link drives the initial decision-plan fetch, not the 1d default", async () => {
+    currentSearch = "symbol=QQQ&decision=plan-1&timeframe=1h";
+    const scanSpy = vi.spyOn(api, "scanDecisions").mockResolvedValue([]);
+
+    render(<MarketWorkspace defaultSymbol="SPY" />);
+
+    await waitFor(() => expect(scanSpy).toHaveBeenCalledWith("QQQ", "1h"));
+  });
+
+  it("an invalid ?timeframe= value falls back to the 1d default rather than crashing", async () => {
+    currentSearch = "symbol=QQQ&timeframe=not-a-real-timeframe";
+    const scanSpy = vi.spyOn(api, "scanDecisions").mockResolvedValue([]);
+
+    render(<MarketWorkspace defaultSymbol="SPY" />);
+
+    await waitFor(() => expect(scanSpy).toHaveBeenCalledWith("QQQ", "1d"));
+  });
+
+  it("selecting a timeframe calls router.push with ?timeframe=", async () => {
+    currentSearch = "symbol=SPY";
+    render(<MarketWorkspace defaultSymbol="SPY" />);
+    await waitFor(() => expect(screen.getByRole("heading", { name: "SPY" })).toBeInTheDocument());
+
+    pushMock.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "1H" }));
+
+    expect(pushMock).toHaveBeenCalledTimes(1);
+    const [url, options] = pushMock.mock.calls[0];
+    expect(url).toBe("?timeframe=1h");
+    // push, never replace -- same back-stack contract as symbol changes,
+    // so browser back/forward restores the prior timeframe too.
+    expect(options).toEqual({ scroll: false });
+  });
 });

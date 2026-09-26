@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_market_data_provider, get_news_provider
+from app.api.deps import get_market_data_provider, get_news_provider, get_session_factory
 from app.live.config import LiveConfig
 from app.main import app
 from app.market_data.capabilities import ProviderCapabilities
@@ -21,6 +21,22 @@ from app.market_data.exceptions import ProviderError
 from app.market_data.provider import MarketDataProvider
 from app.news.fixture_provider import FixtureNewsProvider
 from app.schemas.market_data import MarketSession, PreviousClose, Quote
+
+# Phase 14.1: these fixtures trigger the REAL app lifespan, which now
+# also starts MonitoringService -- without an isolated session factory it
+# would run real per-symbol setup-detection scans against the shared
+# on-disk dev database on every single test below, racing concurrent
+# `checkfirst=True` table creation across the whole file (the root cause
+# of a full-suite hang found during Phase 14.1 validation). An isolated
+# on-disk (not `:memory:`) DB per test: RecomputationEngine/ForecastMonitor/
+# NewsMonitor/MonitoringService each fire off their own `asyncio.to_thread`
+# scan concurrently at lifespan startup, and a single shared `:memory:`
+# connection (StaticPool) is not safe under genuinely concurrent access
+# from multiple OS threads the way a real per-connection file DB is. The
+# `file_session_factory` fixture (tests/conftest.py) also ensures the
+# Engine it creates is disposed at teardown -- an un-disposed file-based
+# Engine's connection pool/file handle otherwise stays alive for the rest
+# of the pytest process (see FileSessionFactory's docstring).
 
 _BASE = datetime.now(timezone.utc)
 
@@ -117,29 +133,69 @@ class _StaticProvider(MarketDataProvider):
 
 
 @pytest.fixture
-def client():
+def client(file_session_factory):
     provider = _QueueProvider()
     app.dependency_overrides[get_market_data_provider] = lambda: provider
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
+    app.dependency_overrides[get_session_factory] = file_session_factory
     app.state.live_config = _FAST_CONFIG
-    with TestClient(app) as test_client:
-        yield test_client, provider
-    app.dependency_overrides.clear()
-    if hasattr(app.state, "live_config"):
-        del app.state.live_config
+    try:
+        with TestClient(app) as test_client:
+            yield test_client, provider
+    finally:
+        app.dependency_overrides.clear()
+        if hasattr(app.state, "live_config"):
+            del app.state.live_config
 
 
 @pytest.fixture
-def static_client():
+def static_client(file_session_factory):
     provider = _StaticProvider()
     app.dependency_overrides[get_market_data_provider] = lambda: provider
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
+    app.dependency_overrides[get_session_factory] = file_session_factory
     app.state.live_config = _FAST_CONFIG
-    with TestClient(app) as test_client:
-        yield test_client, provider
-    app.dependency_overrides.clear()
-    if hasattr(app.state, "live_config"):
-        del app.state.live_config
+    try:
+        with TestClient(app) as test_client:
+            yield test_client, provider
+    finally:
+        app.dependency_overrides.clear()
+        if hasattr(app.state, "live_config"):
+            del app.state.live_config
+
+
+# Phase 14.1: MonitoringService now runs for real in every one of these
+# lifespan-triggering tests and broadcasts `monitor_status` (and
+# occasionally `decision_state_change`) frames to every connection
+# regardless of what that connection subscribed to (§19 -- intentional,
+# see app.api.routes.live._UNIVERSE_WIDE_FRAME_TYPES). `_FAST_CONFIG`'s
+# 0.1s heartbeat also means a `heartbeat` frame can land in the same small
+# window. Tests below that assert on a specific expected frame type must
+# tolerate any of these interleaving at any point, exactly as a real
+# client must -- `_receive_until` skips them by default; the one test that
+# specifically checks for heartbeats opts back in.
+_UNIVERSE_WIDE_TYPES = {"monitor_status", "decision_state_change"}
+_ALL_NOISE_TYPES = _UNIVERSE_WIDE_TYPES | {"heartbeat"}
+
+
+def _receive_until(ws, count: int, max_frames: int = 60, skip: frozenset = _ALL_NOISE_TYPES) -> list[dict]:
+    """Collects `count` frames, skipping (not counting) any frame type in
+    `skip` that interleaves -- by default every noise type (monitor_status/
+    decision_state_change/heartbeat); pass a narrower `skip` set for a test
+    that specifically cares about one of those."""
+    collected: list[dict] = []
+    for _ in range(max_frames):
+        frame = ws.receive_json()
+        if frame["type"] in skip:
+            continue
+        collected.append(frame)
+        if len(collected) >= count:
+            break
+    return collected
+
+
+def _receive_next_meaningful(ws, max_frames: int = 40) -> dict:
+    return _receive_until(ws, count=1, max_frames=max_frames)[0]
 
 
 def test_status_endpoint_reports_provider_capabilities(client):
@@ -155,7 +211,7 @@ def test_subscribing_receives_a_connection_status_then_a_quote(client):
     test_client, _provider = client
     with test_client.websocket_connect("/api/live/stream") as ws:
         ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
-        frames = [ws.receive_json() for _ in range(3)]
+        frames = _receive_until(ws, count=3)
         types_seen = {f["type"] for f in frames}
         assert "connection_status" in types_seen
         assert "quote" in types_seen
@@ -168,7 +224,7 @@ def test_a_forming_candle_frame_follows_the_quote(client):
     test_client, _provider = client
     with test_client.websocket_connect("/api/live/stream") as ws:
         ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
-        frames = [ws.receive_json() for _ in range(4)]
+        frames = _receive_until(ws, count=4)
         assert any(f["type"] == "forming_candle" for f in frames)
 
 
@@ -209,12 +265,12 @@ def test_a_new_connection_gets_the_already_known_quote_even_with_no_new_data(sta
     test_client, _provider = static_client
     with test_client.websocket_connect("/api/live/stream") as ws1:
         ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
-        frames = [ws1.receive_json() for _ in range(3)]
+        frames = _receive_until(ws1, count=3)
         assert any(f["type"] == "quote" for f in frames)
 
         with test_client.websocket_connect("/api/live/stream") as ws2:
             ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
-            second_connection_frames = [ws2.receive_json() for _ in range(2)]
+            second_connection_frames = _receive_until(ws2, count=2)
             quote_frame = next(f for f in second_connection_frames if f["type"] == "quote")
             assert quote_frame["symbol"] == "SPY"
             assert quote_frame["quote"]["price"] == 100.0
@@ -234,25 +290,25 @@ def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):
 def test_unrecognized_action_returns_an_error_frame_not_a_crash(client):
     test_client, _provider = client
     with test_client.websocket_connect("/api/live/stream") as ws:
-        ws.receive_json()  # initial connection_status snapshot
+        _receive_next_meaningful(ws)  # initial connection_status snapshot
         ws.send_json({"action": "bogus"})
-        frame = ws.receive_json()
+        frame = _receive_next_meaningful(ws)
         assert frame["type"] == "error"
 
 
 def test_malformed_subscribe_message_returns_an_error_frame(client):
     test_client, _provider = client
     with test_client.websocket_connect("/api/live/stream") as ws:
-        ws.receive_json()  # initial connection_status snapshot
+        _receive_next_meaningful(ws)  # initial connection_status snapshot
         ws.send_json({"action": "subscribe"})  # missing required "symbol"
-        frame = ws.receive_json()
+        frame = _receive_next_meaningful(ws)
         assert frame["type"] == "error"
 
 
 def test_heartbeat_frames_arrive_on_the_configured_interval(client):
     test_client, _provider = client
     with test_client.websocket_connect("/api/live/stream") as ws:
-        frames = [ws.receive_json() for _ in range(3)]
+        frames = _receive_until(ws, count=3, skip=_UNIVERSE_WIDE_TYPES)
         assert any(f["type"] == "heartbeat" for f in frames)
 
 

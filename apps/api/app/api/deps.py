@@ -87,6 +87,26 @@ def get_watchlist_repository() -> WatchlistRepository:
 
 
 @lru_cache
+def get_session_factory():
+    """The DB session factory background lifespan services (ForecastMonitor/
+    NewsMonitor/MonitoringService) use -- routed through this override point
+    the same way get_market_data_provider/get_news_provider already are, so
+    a test that triggers the real app lifespan (`with TestClient(app) as c`)
+    can override it with an isolated in-memory DB instead of these
+    always-on background loops hitting the real on-disk database on every
+    such test (see app.main.lifespan; Phase 14.1 root-caused a full-suite
+    hang to exactly this -- MonitoringService, unlike the two pre-existing
+    monitors, does real per-symbol setup-detection work on its very first
+    tick and had no override point, so every lifespan-triggering test in
+    test_live_routes.py raced concurrent `checkfirst=True` table creation
+    and writes against one shared real SQLite file for the life of the
+    whole pytest session)."""
+    from app.database.session import SessionLocal
+
+    return SessionLocal
+
+
+@lru_cache
 def get_news_provider() -> NewsProvider:
     provider_name = get_settings().news_provider.lower()
     if provider_name == "yfinance":

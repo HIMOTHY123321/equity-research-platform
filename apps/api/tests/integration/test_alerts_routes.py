@@ -61,6 +61,43 @@ def _seed_event(session_factory, *, alert_id="alert-1", dedup_key="dedup-1", sym
     session.close()
 
 
+def test_prospective_count_reflects_eligible_events_only(db_env):
+    from app.decision_engine.repository import SqlAlchemyDecisionEngineRepository
+    from app.decision_engine.schemas import DecisionState
+    from tests.unit.decision_engine.test_state_machine import make_plan
+
+    session = db_env()
+    SqlAlchemyDecisionEngineRepository(session).save_plan(make_plan(DecisionState.ACTIVE_THESIS))
+    session.close()
+
+    _seed_event(
+        db_env,
+        alert_id="a1",
+        dedup_key="k1",
+        symbol="AAPL",
+        decision_plan_id="plan-1",
+        alert_type=AlertType.INVALIDATED,
+    )
+    # A dev-fixture alert on a reserved fixture symbol must never count.
+    _seed_event(
+        db_env,
+        alert_id="a2",
+        dedup_key="k2",
+        symbol="ZFXA",
+        decision_plan_id="plan-1",
+        alert_type=AlertType.INVALIDATED,
+        origin=AlertOrigin.DEV_FIXTURE,
+    )
+    client = TestClient(app)
+
+    response = client.get("/api/alerts/prospective-count")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["count"] == 1
+    assert body["resolved"] == 0
+
+
 def test_list_alerts_returns_seeded_event(db_env):
     _seed_event(db_env)
     client = TestClient(app)

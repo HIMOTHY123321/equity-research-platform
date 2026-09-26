@@ -62,7 +62,12 @@ class MonitoringUniverse:
         self._repository.upsert_monitoring_subscription(existing.model_copy(update={"enabled": False}))
 
     def _find(self, symbol: str) -> MonitoringSubscription | None:
-        for s in self._repository.list_monitoring_subscriptions():
+        # Regression (Phase 14.1): must seed-if-empty the same way
+        # list_enabled_symbols/list_all_subscriptions do -- otherwise
+        # disable() on a symbol before the universe has ever been listed
+        # silently no-ops (the table looks empty, so `existing is None`,
+        # so disable() returns without writing anything).
+        for s in self.list_all_subscriptions():
             if s.symbol == symbol:
                 return s
         return None

@@ -201,7 +201,11 @@ function WatchlistRow({
         onClick={onToggleMonitoring}
         aria-label={monitored ? `Stop monitoring ${ticker}` : `Monitor ${ticker} for alerts`}
         aria-pressed={monitored}
-        title={monitored ? "Monitoring: on" : "Monitoring: off"}
+        title={
+          monitored
+            ? "Monitoring: on -- alerts enabled for this symbol (independent of Watchlist membership)"
+            : "Monitoring: off -- being on the Watchlist does not by itself enable alerts"
+        }
         className={`px-1 text-[11px] ${monitored ? "text-accent" : "text-muted hover:text-foreground"}`}
       >
         {monitored ? "◉" : "◎"}

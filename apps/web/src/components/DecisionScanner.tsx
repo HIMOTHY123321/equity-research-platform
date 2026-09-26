@@ -144,8 +144,13 @@ export function DecisionScanner() {
 }
 
 function ScannerRowView({ row }: { row: ScannerRow }) {
+  // Phase 14.1: `&timeframe=` is required, not cosmetic -- without it the
+  // linked plan almost never matches Overview's default timeframe and the
+  // highlight there silently never renders (see MarketWorkspace.tsx).
   const href = row.decision_plan_id
-    ? `/?symbol=${row.symbol}&decision=${row.decision_plan_id}`
+    ? `/?symbol=${row.symbol}&decision=${row.decision_plan_id}${
+        row.timeframe ? `&timeframe=${row.timeframe}` : ""
+      }`
     : `/?symbol=${row.symbol}`;
   return (
     <tr className="border-b border-border/60 last:border-0 hover:bg-surface-raised/50">

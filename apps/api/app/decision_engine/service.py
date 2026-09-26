@@ -255,6 +255,10 @@ class ScanResult:
     pass (does not include new_plans' own initial transitions -- read those
     off `new_plans[i].transitions` instead, same as plan_builder always
     returns them)."""
+    snapshot: MarketSnapshot
+    """The canonical snapshot this pass evaluated against -- Phase 14.1
+    reuses it for freshness-transition detection (DATA_STALE/RECOVERED)
+    instead of a second, independent freshness computation."""
 
 
 def run_symbol_scan(
@@ -304,6 +308,7 @@ def run_symbol_scan(
         plans=repository.list_plans(symbol=symbol, timeframe=timeframe.value, limit=1000),
         new_plans=new_plans,
         transitions=all_transitions,
+        snapshot=snapshot,
     )
 
 

@@ -41,6 +41,7 @@ EXPECTED_TABLES = {
     "alert_acknowledgements",
     "alert_preferences",
     "monitoring_subscriptions",
+    "alert_outcomes",
 }
 
 

@@ -22,13 +22,15 @@ from sqlalchemy.orm import Session
 from app.alerts.models import (
     AlertAcknowledgementRecord,
     AlertEventRecord,
+    AlertOutcomeRecord,
     AlertPreferenceRecord,
     Base,
     MonitoringSubscriptionRecord,
 )
-from app.alerts.prospective import PROSPECTIVE_ELIGIBLE_ALERT_TYPES
+from app.alerts.prospective import is_prospective_eligible
 from app.alerts.schemas import (
     AlertEvent,
+    AlertOutcome,
     AlertPreference,
     AlertType,
     MonitoringSubscription,
@@ -86,13 +88,32 @@ class AlertRepository(ABC):
     def remove_monitoring_subscription(self, symbol: str) -> None: ...
 
     @abstractmethod
-    def count_prospective_observations(self) -> int:
-        """§33/§34: how many AlertEvents are genuine, post-deployment
-        candidates for Forward Validation -- see app.alerts.prospective for
-        the eligibility rule this must apply. dev_fixture/historical_replay
-        alerts are structurally excluded, never merely filtered by a caller
-        who might forget."""
+    def count_prospective_observations(self, decision_repository) -> int:
+        """§33/§34, hardened Phase 14.1 §4: how many AlertEvents are
+        genuine, post-deployment, PROVENANCE-VERIFIED candidates for
+        Forward Validation -- see app.alerts.prospective.is_prospective_
+        eligible for the full rule (never trusts `origin` alone).
+        `decision_repository` is required: it's the independent source of
+        truth eligibility is checked against."""
         ...
+
+    @abstractmethod
+    def count_resolved_prospective_observations(self) -> int:
+        """§Phase-14.1-5: only RESOLVED (see app.alerts.resolver) eligible
+        prospective alerts count toward Forward Validation -- creating an
+        alert alone must never increment this."""
+        ...
+
+    @abstractmethod
+    def save_outcome(self, outcome: AlertOutcome) -> tuple[AlertOutcome, bool]:
+        """Resolve-once: returns (stored_outcome, created). `created` is
+        False when an outcome for this alert_id already existed -- the
+        existing row is returned unchanged, mirroring record_event's own
+        exactly-once contract."""
+        ...
+
+    @abstractmethod
+    def get_outcome_for_alert(self, alert_id: str) -> Optional[AlertOutcome]: ...
 
 
 class SqlAlchemyAlertRepository(AlertRepository):
@@ -105,6 +126,7 @@ class SqlAlchemyAlertRepository(AlertRepository):
                 AlertAcknowledgementRecord.__table__,
                 AlertPreferenceRecord.__table__,
                 MonitoringSubscriptionRecord.__table__,
+                AlertOutcomeRecord.__table__,
             ],
             checkfirst=True,
         )
@@ -258,11 +280,61 @@ class SqlAlchemyAlertRepository(AlertRepository):
             self._session.delete(existing)
             self._session.commit()
 
-    def count_prospective_observations(self) -> int:
+    def count_prospective_observations(self, decision_repository) -> int:
+        rows = self._session.execute(
+            select(AlertEventRecord).where(AlertEventRecord.origin == "live_prospective")
+        ).scalars()
+        candidates = (AlertEvent.model_validate(r.payload) for r in rows)
+        return sum(1 for event in candidates if is_prospective_eligible(event, decision_repository))
+
+    def count_resolved_prospective_observations(self, decision_repository) -> int:
+        resolved_alert_ids = {
+            row.alert_id for row in self._session.execute(select(AlertOutcomeRecord)).scalars()
+        }
+        if not resolved_alert_ids:
+            return 0
         rows = self._session.execute(
             select(AlertEventRecord).where(
                 AlertEventRecord.origin == "live_prospective",
-                AlertEventRecord.alert_type.in_([t.value for t in PROSPECTIVE_ELIGIBLE_ALERT_TYPES]),
+                AlertEventRecord.alert_id.in_(resolved_alert_ids),
             )
         ).scalars()
-        return len(list(rows))
+        candidates = (AlertEvent.model_validate(r.payload) for r in rows)
+        return sum(1 for event in candidates if is_prospective_eligible(event, decision_repository))
+
+    def save_outcome(self, outcome: AlertOutcome) -> tuple[AlertOutcome, bool]:
+        existing = self._session.execute(
+            select(AlertOutcomeRecord).where(AlertOutcomeRecord.alert_id == outcome.alert_id)
+        ).scalar_one_or_none()
+        if existing is not None:
+            return AlertOutcome.model_validate(existing.payload), False
+
+        row = AlertOutcomeRecord(
+            outcome_id=outcome.outcome_id,
+            alert_id=outcome.alert_id,
+            symbol=outcome.symbol,
+            resolved_at=outcome.resolved_at,
+            payload=outcome.model_dump(mode="json"),
+        )
+        self._session.add(row)
+        try:
+            self._session.commit()
+        except IntegrityError:
+            # Lost a race against a concurrent resolver pass -- the other
+            # insert wins (§Phase-14.1-5's "repeated resolver runs cannot
+            # duplicate outcomes", same exactly-once discipline as
+            # record_event).
+            self._session.rollback()
+            existing = self._session.execute(
+                select(AlertOutcomeRecord).where(AlertOutcomeRecord.alert_id == outcome.alert_id)
+            ).scalar_one_or_none()
+            if existing is not None:
+                return AlertOutcome.model_validate(existing.payload), False
+            raise
+        return outcome, True
+
+    def get_outcome_for_alert(self, alert_id: str) -> Optional[AlertOutcome]:
+        row = self._session.execute(
+            select(AlertOutcomeRecord).where(AlertOutcomeRecord.alert_id == alert_id)
+        ).scalar_one_or_none()
+        return AlertOutcome.model_validate(row.payload) if row is not None else None

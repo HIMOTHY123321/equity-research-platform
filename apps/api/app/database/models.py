@@ -886,3 +886,24 @@ class MonitoringSubscriptionRecord(Base):
     decision_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     preferred_timeframes: Mapped[dict] = mapped_column(JSON, default=list)
     added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class AlertOutcomeRecord(Base):
+    """Phase 14.1 (§33): the resolved, future-data outcome of one eligible
+    prospective AlertEvent. `UniqueConstraint("alert_id")` is the actual
+    resolve-once mechanism -- a second resolution attempt for the same
+    alert_id is an insert-or-ignore, not a rewrite (see
+    AlertRepository.save_outcome), so this table alone is what makes
+    "no duplicate resolved observation" true across concurrent resolver
+    passes and process restarts."""
+
+    __tablename__ = "alert_outcomes"
+    __table_args__ = (UniqueConstraint("alert_id", name="uq_alert_outcomes_alert_id"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    outcome_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    alert_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    payload: Mapped[dict] = mapped_column(JSON)
+    row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

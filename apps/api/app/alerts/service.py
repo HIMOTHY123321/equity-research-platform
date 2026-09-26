@@ -14,10 +14,10 @@ from __future__ import annotations
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from app.alerts.dedup import condition_dedup_key, transition_dedup_key
+from app.alerts.dedup import DEFAULT_COOLDOWN, condition_dedup_key, transition_dedup_key
 from app.alerts.repository import AlertRepository
 from app.alerts.schemas import (
     DEFAULT_ALERT_PREFERENCES,
@@ -196,12 +196,21 @@ class AlertService:
         decision_plan_id: Optional[str] = None,
         provider: Optional[str] = None,
         data_freshness_state: Optional[str] = None,
+        cooldown: timedelta = DEFAULT_COOLDOWN,
     ) -> Optional[AlertEvent]:
         """Non-transition alerts (§3): condition PASSED/FAILED, conflict
         added/removed, catalyst reclassification, data staleness/recovery,
         stream connect/disconnect. `identity` disambiguates within
-        (symbol, alert_type) -- see app.alerts.dedup.condition_dedup_key."""
-        dedup_key = condition_dedup_key(symbol, alert_type, identity, source_timestamp)
+        (symbol, alert_type) -- see app.alerts.dedup.condition_dedup_key.
+        `cooldown` defaults to the standard 1-hour repeated-poll cooldown;
+        callers that already throttle on a genuine state TRANSITION (e.g.
+        MonitoringService's freshness-transition detector) should pass a
+        much shorter one -- the transition detector is the real throttle
+        there, and the dedup key only needs to guard against re-emitting
+        the exact same transition instant twice (a restart racing the same
+        tick, concurrent evaluation), not collapse two real, separate
+        episodes that happen to land in the same hour."""
+        dedup_key = condition_dedup_key(symbol, alert_type, identity, source_timestamp, cooldown=cooldown)
         event = AlertEvent(
             alert_id=str(uuid.uuid4()),
             symbol=symbol,

@@ -10,24 +10,13 @@ same dedup_key must still leave exactly one row.
 
 from __future__ import annotations
 
-import tempfile
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
-
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 from app.alerts.repository import SqlAlchemyAlertRepository
 from app.alerts.schemas import AlertEvent, AlertOrigin, AlertSeverity, AlertType
 
 NOW = datetime(2026, 1, 1, 10, 0, tzinfo=timezone.utc)
-
-
-def _file_session_factory():
-    db_path = Path(tempfile.mkdtemp()) / "alerts_restart_test.db"
-    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-    return sessionmaker(bind=engine)
 
 
 def _event(alert_id: str, dedup_key: str) -> AlertEvent:
@@ -49,8 +38,8 @@ def _event(alert_id: str, dedup_key: str) -> AlertEvent:
     )
 
 
-def test_restart_does_not_duplicate_transition_alert():
-    session_factory = _file_session_factory()
+def test_restart_does_not_duplicate_transition_alert(file_session_factory):
+    session_factory = file_session_factory()
 
     # "Before restart": one process records the transition alert and the
     # session/process ends (closed, not just committed-and-kept-open).
@@ -81,8 +70,8 @@ def test_restart_does_not_duplicate_transition_alert():
     assert len(all_events) == 1
 
 
-def test_concurrent_record_event_same_dedup_key_creates_exactly_one_row():
-    session_factory = _file_session_factory()
+def test_concurrent_record_event_same_dedup_key_creates_exactly_one_row(file_session_factory):
+    session_factory = file_session_factory()
     # Mirrors app.main's lifespan: tables are created once, synchronously,
     # before anything concurrent runs -- see Base.metadata.create_all(...)
     # there for why (SQLite's checkfirst isn't atomic across threads/

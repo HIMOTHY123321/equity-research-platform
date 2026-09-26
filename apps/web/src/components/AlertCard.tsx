@@ -33,8 +33,13 @@ export function AlertCard({
   read: boolean;
   onAcknowledge: (alertId: string) => void;
 }) {
+  // Phase 14.1: `&timeframe=` is required, not cosmetic -- without it the
+  // linked plan almost never matches Overview's default timeframe and the
+  // highlight below silently never renders (see MarketWorkspace.tsx).
   const deepLink = alert.decision_plan_id
-    ? `/?symbol=${alert.symbol}&decision=${alert.decision_plan_id}`
+    ? `/?symbol=${alert.symbol}&decision=${alert.decision_plan_id}${
+        alert.timeframe ? `&timeframe=${alert.timeframe}` : ""
+      }`
     : `/?symbol=${alert.symbol}`;
 
   return (

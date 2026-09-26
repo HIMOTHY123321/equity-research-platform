@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 from app.api.deps import (
     get_market_data_provider,
     get_news_provider,
+    get_session_factory,
     get_shared_market_data_cache,
     get_streaming_provider,
     get_watchlist_repository,
@@ -33,7 +34,7 @@ from app.api.routes import (
 )
 from app.config import get_settings
 from app.database.models import Base
-from app.database.session import SessionLocal, engine
+from app.database.session import engine
 from app.live.config import DEFAULT_LIVE_CONFIG
 from app.live.forecast_monitor import ForecastMonitor
 from app.live.news_monitor import NewsMonitor
@@ -90,6 +91,17 @@ async def lifespan(app: FastAPI):
     streaming_provider = app.dependency_overrides.get(get_streaming_provider, get_streaming_provider)()
     cache = get_shared_market_data_cache()
     live_config = getattr(app.state, "live_config", DEFAULT_LIVE_CONFIG)
+    # Phase 14.1: routed through the same override point as every other
+    # lifespan dependency above -- previously ForecastMonitor/NewsMonitor/
+    # MonitoringService imported SessionLocal directly, so a test triggering
+    # the real lifespan (`with TestClient(app) as c`) had no way to keep
+    # these background loops off the real on-disk database. MonitoringService
+    # does real per-symbol setup-detection work on its very first tick
+    # (unlike the other two, which no-op quickly against an empty table),
+    # and that -- concurrent `checkfirst=True` table creation plus real
+    # writes racing across every lifespan-triggering test in the same
+    # pytest session -- was the root cause of a full-suite hang.
+    session_factory = app.dependency_overrides.get(get_session_factory, get_session_factory)()
 
     live_service = LiveMarketService(
         market_provider,
@@ -98,8 +110,8 @@ async def lifespan(app: FastAPI):
         streaming_provider=streaming_provider,
     )
     recompute_engine = RecomputationEngine(live_service, market_provider, cache)
-    forecast_monitor = ForecastMonitor(SessionLocal, market_provider, news_provider, config=live_config)
-    news_monitor = NewsMonitor(SessionLocal, news_provider, config=live_config)
+    forecast_monitor = ForecastMonitor(session_factory, market_provider, news_provider, config=live_config)
+    news_monitor = NewsMonitor(session_factory, news_provider, config=live_config)
 
     # Phase 14: the background monitor that finally drives the Decision
     # Engine across a whole configurable universe rather than only ever
@@ -111,7 +123,7 @@ async def lifespan(app: FastAPI):
         get_watchlist_repository, get_watchlist_repository
     )()
     monitoring_service = MonitoringService(
-        SessionLocal, watchlist_repository, market_provider, config=live_config
+        session_factory, watchlist_repository, market_provider, config=live_config
     )
 
     app.state.live_service = live_service
