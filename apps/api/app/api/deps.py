@@ -34,6 +34,8 @@ if TYPE_CHECKING:
 
     from app.ai_analysis.provider import AIAnalysisProvider
     from app.database.models import User
+    from app.live.entitlement import MarketDataEntitlement
+    from app.live.mock_streaming import MockStreamingProvider
     from app.live.streaming import StreamingMarketDataProvider
 
 
@@ -86,6 +88,38 @@ def get_streaming_provider() -> "Optional[StreamingMarketDataProvider]":
     from app.market_data.massive_streaming import MassiveStreamingProvider
 
     return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
+
+
+@lru_cache
+def get_dev_mock_streaming_provider() -> "Optional[MockStreamingProvider]":
+    """Phase 17 (§60/§79/§99): the dev-only, hand-scriptable streaming
+    provider behind /api/dev/live-simulator -- None (and so unreachable)
+    unless BOTH settings.enable_dev_live_simulator is true AND environment
+    is not production (the config validator already makes that combination
+    impossible to configure at all, but this is checked again here so the
+    provider is never even constructed if that check were ever bypassed)."""
+    settings = get_settings()
+    if settings.is_production or not settings.enable_dev_live_simulator:
+        return None
+    from app.live.mock_streaming import MockStreamingProvider
+
+    return MockStreamingProvider()
+
+
+@lru_cache
+def get_market_data_entitlement() -> "MarketDataEntitlement":
+    """Phase 17 (§1/§27): resolved once per process from operator-set
+    config only -- never from whether get_streaming_provider() above
+    happens to return non-None (a configured key proves nothing about plan
+    tier; see app.live.entitlement)."""
+    from app.live.entitlement import resolve_streaming_entitlement
+
+    settings = get_settings()
+    return resolve_streaming_entitlement(
+        provider_name=settings.market_data_provider,
+        api_key=settings.massive_api_key,
+        streaming_entitled_flag=settings.massive_streaming_entitled,
+    )
 
 
 def get_watchlist_repository(

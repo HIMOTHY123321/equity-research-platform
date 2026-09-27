@@ -18,6 +18,7 @@ from __future__ import annotations
 
 from enum import Enum
 from functools import lru_cache
+from typing import Optional
 
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -123,6 +124,15 @@ class Settings(BaseSettings):
     massive_rest_base_url: str = "https://api.massive.com"
     massive_ws_url: str = "wss://socket.massive.com/stocks"
 
+    # Phase 17 (§1/§27/§75): explicit, operator-set confirmation that the
+    # configured Massive account actually carries real-time streaming
+    # entitlement -- Massive's API exposes no "what tier is this key"
+    # call, so a valid key alone is NEVER treated as proof (see
+    # app.live.entitlement). None (default, unset) means UNKNOWN, not
+    # "assume yes." Only an explicit true/false here can produce
+    # ENTITLED/NOT_ENTITLED.
+    massive_streaming_entitled: Optional[bool] = None
+
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
@@ -138,6 +148,15 @@ class Settings(BaseSettings):
     # Scheduling
     scheduler_shared_secret: str = ""
     report_timezone: str = "America/New_York"
+
+    # Phase 17 (§60/§79/§99): a deterministic, fully-scripted streaming
+    # provider (app.live.mock_streaming.MockStreamingProvider) a developer
+    # can drive by hand via /api/dev/live-simulator to preview live-chart
+    # UX without any real provider account. False by default even in
+    # development -- opting in is a conscious choice, not an ambient
+    # default -- and the production validator below makes it structurally
+    # impossible to enable in production, not just discouraged.
+    enable_dev_live_simulator: bool = False
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -188,6 +207,12 @@ class Settings(BaseSettings):
             )
         if self.cors_origins.strip() in ("", "*"):
             problems.append("CORS_ORIGINS must be an explicit origin list in production, never '*'")
+        if self.enable_dev_live_simulator:
+            problems.append(
+                "ENABLE_DEV_LIVE_SIMULATOR must not be true in production -- the mock streaming "
+                "simulator is a development-only tool for previewing live-chart UX with synthetic "
+                "data, never a real market data source"
+            )
 
         if problems:
             raise ConfigurationError(

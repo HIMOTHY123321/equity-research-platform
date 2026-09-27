@@ -26,6 +26,7 @@ from app.live.config import (
     classify_freshness,
     resolve_poll_interval,
 )
+from app.live.entitlement import MarketDataEntitlement, resolve_streaming_entitlement
 from app.live.events import (
     CompletedCandleEvent,
     ConnectionStatusEvent,
@@ -53,7 +54,7 @@ from app.live.streaming import (
 )
 from app.market_data.capabilities import ProviderCapabilities
 from app.market_data.provider import MarketDataProvider
-from app.schemas.market_data import Quote, Timeframe
+from app.schemas.market_data import Candle, Quote, Timeframe
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +89,10 @@ class _SymbolState:
     last_nbbo_timestamp: Optional[datetime] = None
     last_nbbo_sequence: Optional[int] = None
     last_aggregate_window_end: Optional[datetime] = None
+    # Phase 17 (§18/§44): high-water mark per timeframe of the newest
+    # gap-filled bar already published, so a second reconnect soon after
+    # the first never republishes the same REST-backfilled bars.
+    last_gap_filled_bucket: dict = field(default_factory=dict)
 
 
 def _is_newer(
@@ -127,6 +132,7 @@ class LiveMarketService:
         now_fn=lambda: datetime.now(timezone.utc),
         streaming_provider: Optional[StreamingMarketDataProvider] = None,
         latency_tracker: Optional[LatencyTracker] = None,
+        entitlement: Optional[MarketDataEntitlement] = None,
     ) -> None:
         self._provider = provider
         self._provider_name = provider_name
@@ -145,6 +151,11 @@ class LiveMarketService:
         self._streaming_provider = streaming_provider
         self._stream_task: Optional[asyncio.Task] = None
         self._latency = latency_tracker or LatencyTracker()
+        # Phase 17 (§1/§27): a fact about the ACCOUNT, never inferred from
+        # the streaming connection succeeding -- see app.live.entitlement.
+        self._entitlement = entitlement or resolve_streaming_entitlement(
+            provider_name=provider_name, api_key="", streaming_entitled_flag=None
+        )
 
     # ------------------------------------------------------------- capability
 
@@ -153,8 +164,23 @@ class LiveMarketService:
             return self._streaming_provider.capabilities()
         return self._provider.capabilities()
 
+    def entitlement(self) -> MarketDataEntitlement:
+        return self._entitlement
+
     def is_streaming(self) -> bool:
+        """Technical fact: is a streaming connection actually running.
+        Deliberately NOT entitlement-gated -- diagnostic/internal use
+        (e.g. connection_status). Use `real_time_available()` for the
+        user-facing "may this show REAL TIME" question (§1)."""
         return self._use_streaming()
+
+    def real_time_available(self) -> bool:
+        """(§1/§39) REAL TIME may be shown ONLY when BOTH are true: a
+        streaming connection is technically active AND the configured
+        account has confirmed entitlement. Neither alone is sufficient --
+        this is the one function the frontend's REAL TIME indicator must
+        ultimately be driven from (via /api/live/status)."""
+        return self._use_streaming() and self._entitlement.confirmed
 
     def latency_summary(self) -> list[LatencySummary]:
         return self._latency.summary()
@@ -412,15 +438,23 @@ class LiveMarketService:
         loop bring the state back to CONNECTED. A dropped connection never
         silently falls back to a different provider (#P) -- it stays
         DISCONNECTED/RESYNCING until this same upstream genuinely recovers."""
+        first_connect = True
         try:
             while True:
                 try:
+                    gap_started_at = self._last_message_at
                     await self._streaming_provider.connect()
                     for symbol, state in list(self._symbols.items()):
                         if state.stream_channels:
                             await self._streaming_provider.subscribe(symbol, state.stream_channels)
                     self._reconnect_attempts = 0
                     self._set_connection_state(ConnectionState.CONNECTED)
+                    if not first_connect and gap_started_at is not None:
+                        gap_seconds = (self._now() - gap_started_at).total_seconds()
+                        if gap_seconds >= self._config.gap_fill_min_gap_seconds:
+                            for symbol in list(self._symbols.keys()):
+                                await self._gap_fill_symbol(symbol, gap_started_at)
+                    first_connect = False
                     async for event in self._streaming_provider.events():
                         self._handle_stream_event(event)
                         self._last_message_at = self._now()
@@ -439,6 +473,67 @@ class LiveMarketService:
                     self._set_connection_state(ConnectionState.RESYNCING)
         except asyncio.CancelledError:
             return
+
+    async def _gap_fill_symbol(self, symbol: str, gap_started_at: datetime) -> None:
+        """Phase 17 (§18/§44): after a genuine outage (gate: gap >=
+        config.gap_fill_min_gap_seconds, checked by the caller), backfill
+        the bars this service missed from the REST provider's own
+        historical candles -- never by guessing at individual missed
+        trades. Only bars that are (a) fully CLOSED (older than the
+        current live bucket) and (b) newer than the last bar already
+        gap-filled or live-observed are published, each explicitly marked
+        `gap_filled=True` so the frontend/Decision Engine can distinguish
+        provenance without treating it as anything other than a real,
+        provider-reported bar."""
+        state = self._symbols.get(symbol)
+        if state is None:
+            return
+        now = self._now()
+        session = current_live_session(now)
+        for timeframe in list(state.timeframes):
+            try:
+                candles: list[Candle] = await asyncio.to_thread(
+                    self._provider.get_candles, symbol, timeframe, self._config.gap_fill_lookback_bars
+                )
+            except Exception:
+                logger.warning("Gap-fill REST fetch failed for %s/%s", symbol, timeframe, exc_info=True)
+                continue
+
+            current_bucket_open = bucket_start(now, timeframe)
+            high_water = state.last_gap_filled_bucket.get(timeframe, gap_started_at)
+            forming = state.forming_candles.get(timeframe)
+            if forming is not None and forming.timestamp > high_water:
+                high_water = forming.timestamp
+
+            for candle in candles:
+                if candle.timestamp <= high_water or candle.timestamp >= current_bucket_open:
+                    continue
+                age_seconds = max((now - candle.timestamp).total_seconds(), 0.0)
+                freshness = FreshnessInfo(
+                    source_timestamp=candle.timestamp,
+                    received_at=now,
+                    age_seconds=age_seconds,
+                    provider=self._provider_name,
+                    market_session=session,
+                    freshness_state=classify_freshness(
+                        age_seconds, connected=True, session=session, config=self._config
+                    ),
+                )
+                live_candle = LiveCandle(
+                    symbol=symbol,
+                    timeframe=timeframe.value,
+                    timestamp=candle.timestamp,
+                    open=candle.open,
+                    high=candle.high,
+                    low=candle.low,
+                    close=candle.close,
+                    volume=candle.volume,
+                    state=CandleState.COMPLETED,
+                    freshness=freshness,
+                    gap_filled=True,
+                )
+                self._publish(CompletedCandleEvent(symbol=symbol, candle=live_candle))
+                state.last_gap_filled_bucket[timeframe] = candle.timestamp
 
     def _handle_stream_event(self, event) -> None:
         received_at = self._now()

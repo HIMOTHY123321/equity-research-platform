@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from app.live.candle_builder import bucket_start
 from app.live.config import DEFAULT_LIVE_CONFIG, SubscriptionPriority
 from app.live.events import CompletedCandleEvent, FormingCandleEvent, QuoteEvent
 from app.live.mock_streaming import MockStreamingProvider
@@ -391,3 +392,240 @@ async def test_status_endpoint_shaped_capabilities_reflect_streaming_provider():
     assert caps.streaming_trades is True
     assert caps.streaming_quotes is True
     await service.shutdown()
+
+
+# ---------------------------------------------------------- Phase 17 entitlement gating
+
+
+@pytest.mark.asyncio
+async def test_real_time_available_is_false_without_confirmed_entitlement_even_while_streaming():
+    """(§1/§78) A technically-connected streaming provider must NOT be
+    enough on its own -- the default (no entitlement passed) resolves to
+    UNKNOWN, which must gate REAL TIME off exactly like NOT_ENTITLED does."""
+    service, stream = await _service_with_stream()
+    await service.subscribe("SPY", SubscriptionPriority.VIEWED)
+    await _wait_until(lambda: stream.connect_count >= 1)
+
+    assert service.is_streaming() is True
+    assert service.entitlement().confirmed is False
+    assert service.real_time_available() is False
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_real_time_available_is_true_only_when_streaming_and_entitled():
+    from app.live.entitlement import EntitlementStatus, MarketDataEntitlement
+
+    rest = _StubRestProvider()
+    stream = MockStreamingProvider()
+    entitled = MarketDataEntitlement(
+        provider="massive", status=EntitlementStatus.ENTITLED, reason="operator-confirmed"
+    )
+    service = LiveMarketService(
+        rest,
+        provider_name="massive",
+        now_fn=lambda: _BASE,
+        streaming_provider=stream,
+        config=_fast_config(),
+        entitlement=entitled,
+    )
+    await service.subscribe("SPY", SubscriptionPriority.VIEWED)
+    await _wait_until(lambda: stream.connect_count >= 1)
+
+    assert service.real_time_available() is True
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_real_time_available_is_false_when_entitled_but_not_streaming():
+    from app.live.entitlement import EntitlementStatus, MarketDataEntitlement
+
+    rest = _StubRestProvider()
+    entitled = MarketDataEntitlement(
+        provider="massive", status=EntitlementStatus.ENTITLED, reason="operator-confirmed"
+    )
+    service = LiveMarketService(rest, provider_name="massive", now_fn=lambda: _BASE, entitlement=entitled)
+    assert service.is_streaming() is False
+    assert service.real_time_available() is False
+
+
+# ---------------------------------------------------------- Phase 17 gap-fill on reconnect
+
+
+class _GapFillRestProvider(_StubRestProvider):
+    """Unlike _StubRestProvider, get_candles is actually usable -- only the
+    gap-fill tests below exercise it; every other test in this file keeps
+    using _StubRestProvider, whose get_candles asserts it is NEVER called
+    (proving gap-fill stays off during a fast, sub-threshold reconnect)."""
+
+    def __init__(self, candles):
+        self._candles = candles
+
+    def get_candles(self, symbol, timeframe, limit=200):
+        return self._candles
+
+
+def _candle(ts):
+    from app.schemas.market_data import Candle
+
+    return Candle(
+        symbol="SPY",
+        timeframe=Timeframe.ONE_MIN,
+        timestamp=ts,
+        open=1,
+        high=2,
+        low=0.5,
+        close=1.5,
+        volume=100,
+    )
+
+
+@pytest.mark.asyncio
+async def test_gap_fill_backfills_closed_bars_after_a_genuine_outage():
+    clock = {"now": _BASE}
+    candles = [_candle(_BASE + timedelta(minutes=i)) for i in range(1, 5)]  # +1m..+4m, all closed by +10m
+    rest = _GapFillRestProvider(candles)
+    stream = MockStreamingProvider()
+    service = LiveMarketService(
+        rest,
+        provider_name="massive",
+        now_fn=lambda: clock["now"],
+        streaming_provider=stream,
+        config=_fast_config(),
+    )
+    completed = []
+    listener = service.add_listener()
+
+    async def _drain():
+        while True:
+            event = await listener.get()
+            if isinstance(event, CompletedCandleEvent):
+                completed.append(event)
+
+    drain_task = asyncio.create_task(_drain())
+
+    await service.subscribe("SPY", SubscriptionPriority.VIEWED, timeframes=(Timeframe.ONE_MIN,))
+    await _wait_until(lambda: stream.connect_count >= 1)
+    stream.push_event(_trade(100.0, _BASE, sequence=1))
+    await asyncio.sleep(0.02)
+
+    stream.push_disconnect()
+    clock["now"] = _BASE + timedelta(minutes=10)  # >> gap_fill_min_gap_seconds
+    await _wait_until(lambda: stream.connect_count >= 2, timeout=3.0)
+    await asyncio.sleep(0.02)
+
+    drain_task.cancel()
+    await service.shutdown()
+
+    gap_filled = [e for e in completed if e.candle.gap_filled]
+    assert len(gap_filled) == 4
+    assert [e.candle.timestamp for e in gap_filled] == [c.timestamp for c in candles]
+    assert all(e.candle.state == CandleState.COMPLETED for e in gap_filled)
+
+
+@pytest.mark.asyncio
+async def test_gap_fill_does_not_republish_on_a_second_reconnect():
+    clock = {"now": _BASE}
+    candles = [_candle(_BASE + timedelta(minutes=1))]
+    rest = _GapFillRestProvider(candles)
+    stream = MockStreamingProvider()
+    service = LiveMarketService(
+        rest,
+        provider_name="massive",
+        now_fn=lambda: clock["now"],
+        streaming_provider=stream,
+        config=_fast_config(),
+    )
+    completed = []
+    listener = service.add_listener()
+
+    async def _drain():
+        while True:
+            event = await listener.get()
+            if isinstance(event, CompletedCandleEvent):
+                completed.append(event)
+
+    drain_task = asyncio.create_task(_drain())
+
+    await service.subscribe("SPY", SubscriptionPriority.VIEWED, timeframes=(Timeframe.ONE_MIN,))
+    await _wait_until(lambda: stream.connect_count >= 1)
+    stream.push_event(_trade(100.0, _BASE, sequence=1))
+    await asyncio.sleep(0.02)
+
+    stream.push_disconnect()
+    clock["now"] = _BASE + timedelta(minutes=10)
+    await _wait_until(lambda: stream.connect_count >= 2, timeout=3.0)
+    await asyncio.sleep(0.02)
+
+    stream.push_disconnect()
+    clock["now"] = _BASE + timedelta(minutes=20)
+    await _wait_until(lambda: stream.connect_count >= 3, timeout=3.0)
+    await asyncio.sleep(0.02)
+
+    drain_task.cancel()
+    await service.shutdown()
+
+    gap_filled = [e for e in completed if e.candle.gap_filled]
+    assert len(gap_filled) == 1  # not republished on the second reconnect
+
+
+# ---------------------------------------------------------- Phase 17 multi-timeframe aggregation
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_timeframes_fold_independently_with_no_volume_double_counting():
+    """Phase 17 (§93): a symbol subscribed at both 1m and 5m must produce
+    two independently correct forming candles from the SAME underlying
+    per-second aggregate stream -- each timeframe's volume is its own sum
+    over its own bucket, never the other timeframe's total leaking in, and
+    a 1m boundary crossing must not disturb the still-open 5m bar."""
+    service, _ = await _service_with_stream()
+    state = _SymbolState()
+    state.timeframes.add(Timeframe.ONE_MIN)
+    state.timeframes.add(Timeframe.FIVE_MIN)
+    service._symbols["SPY"] = state
+
+    t0 = _BASE
+    for i in range(3):
+        start = t0 + timedelta(seconds=i)
+        end = start + timedelta(seconds=1)
+        service.ingest_second_aggregate(
+            _agg("SPY", start, end, 100.0 + i, 100.0 + i, 100.0 + i, 100.0 + i, 10), received_at=end
+        )
+
+    one_min = service.latest_candle("SPY", Timeframe.ONE_MIN)
+    five_min = service.latest_candle("SPY", Timeframe.FIVE_MIN)
+    assert one_min.volume == 30  # 3 aggregates * 10, this timeframe's own sum
+    assert five_min.volume == 30  # same source data, independently summed -- not 60
+    assert one_min.state == CandleState.FORMING
+    assert five_min.state == CandleState.FORMING
+
+    # Cross the 1m boundary (t0+60s) without crossing the 5m boundary (t0+5m):
+    # the 1m bar completes, the 5m bar keeps accumulating undisturbed.
+    next_min_start = t0 + timedelta(seconds=60)
+    next_min_end = next_min_start + timedelta(seconds=1)
+    service.ingest_second_aggregate(
+        _agg("SPY", next_min_start, next_min_end, 105.0, 105.0, 105.0, 105.0, 40), received_at=next_min_end
+    )
+
+    new_one_min = service.latest_candle("SPY", Timeframe.ONE_MIN)
+    still_five_min = service.latest_candle("SPY", Timeframe.FIVE_MIN)
+    assert new_one_min.timestamp == bucket_start(next_min_start, Timeframe.ONE_MIN)
+    assert new_one_min.volume == 40  # fresh 1m bucket, not carried over from the old one
+    assert still_five_min.timestamp == five_min.timestamp  # same 5m bucket, undisturbed
+    assert still_five_min.volume == 70  # 30 + 40, still accumulating in the same 5m bar
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_fast_reconnect_never_touches_rest_at_all():
+    """A reconnect faster than gap_fill_min_gap_seconds must not call
+    get_candles -- the pre-existing _StubRestProvider asserts on any call,
+    so this test fails loudly if gap-fill fires when it shouldn't."""
+    service, stream = await _service_with_stream()  # _StubRestProvider under the hood
+    await service.subscribe("SPY", SubscriptionPriority.VIEWED)
+    await _wait_until(lambda: stream.connect_count >= 1)
+
+    stream.push_disconnect()
+    await _wait_until(lambda: stream.connect_count >= 2, timeout=3.0)
+    await service.shutdown()  # no AssertionError means get_candles was never called

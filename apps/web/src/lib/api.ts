@@ -185,6 +185,35 @@ export function getLiveStatus(): Promise<LiveStatusResponse> {
   return request<LiveStatusResponse>("/api/live/status");
 }
 
+// ---- Dev-only live simulator (Phase 17 §60/§79/§99) ------------------------
+// Every one of these 404s unless the backend has ENABLE_DEV_LIVE_SIMULATOR
+// set (impossible in production -- see app.api.routes.dev_live). Only
+// called from src/app/dev/live-simulator, which itself refuses to render
+// outside a development build (see that page's own guard).
+
+export interface DevSimulatorStatus {
+  enabled: boolean;
+  connected: boolean;
+  connect_count: number;
+  subscriptions: Record<string, string[]>;
+}
+
+export function getDevSimulatorStatus(): Promise<DevSimulatorStatus> {
+  return request<DevSimulatorStatus>("/api/dev/live-simulator/status");
+}
+
+export function pushDevSimulatorTrade(symbol: string, price: number): Promise<{ pushed: boolean }> {
+  return request<{ pushed: boolean }>("/api/dev/live-simulator/trade", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ symbol, price }),
+  });
+}
+
+export function pushDevSimulatorDisconnect(): Promise<{ pushed: boolean }> {
+  return request<{ pushed: boolean }>("/api/dev/live-simulator/disconnect", { method: "POST" });
+}
+
 /** (MARKET UX COMPLETION PASS #3) `watchlistTickers` only breaks ties
  * among already-matched results (ranking tier 5) -- never widens what
  * matches. Never falls back to SPY: an empty/no-match query returns an

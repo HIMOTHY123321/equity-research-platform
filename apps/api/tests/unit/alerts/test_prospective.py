@@ -60,6 +60,26 @@ def test_dev_fixture_is_never_eligible_even_for_eligible_type():
     assert is_prospective_eligible(event, decision_repo) is False
 
 
+def test_nothing_is_eligible_while_the_dev_live_simulator_is_enabled(monkeypatch):
+    """Phase 17 (§80, CRITICAL): the mock streaming simulator's synthetic
+    events flow through the exact same LiveMarketService/RecomputationEngine
+    /DecisionEngine pipeline real market data does, so a plan/alert built
+    from it is otherwise indistinguishable from a real one (real,
+    non-fixture setup_id; real persisted DecisionPlan). The only reliable
+    signal is process-wide: whenever this process is configured with the
+    simulator on, NOTHING is prospectively eligible -- even an event that
+    would otherwise satisfy every other check."""
+    import app.alerts.prospective as prospective_module
+    from app.config import Settings
+
+    monkeypatch.setattr(
+        prospective_module, "get_settings", lambda: Settings(enable_dev_live_simulator=True)
+    )
+    decision_repo = _decision_repo_with_real_plan()
+    event = _event("a1", "k1", AlertType.INVALIDATED, AlertOrigin.LIVE_PROSPECTIVE)
+    assert is_prospective_eligible(event, decision_repo) is False
+
+
 def test_historical_replay_is_never_eligible_even_for_eligible_type():
     decision_repo = _decision_repo_with_real_plan()
     event = _event("a1", "k1", AlertType.INVALIDATED, AlertOrigin.HISTORICAL_REPLAY)

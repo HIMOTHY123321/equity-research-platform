@@ -85,6 +85,18 @@ class LiveConfig:
     # provider-safe poll floor, not a claimed real-time feed.
     news_monitor_interval_seconds: float = 60.0
 
+    # Phase 17 (§18/§44): gap-fill on reconnect only fires for a genuine
+    # outage -- a fast blip-and-recover (the common case, sub-second) never
+    # touches REST at all, since the streaming path is deliberately never
+    # supposed to poll under normal operation (see LiveMarketService
+    # docstring). Only a disconnect this long or longer triggers a REST
+    # historical backfill of the missed, fully-CLOSED bars.
+    gap_fill_min_gap_seconds: float = 5.0
+    # How many of the most recent REST candles to fetch per (symbol,
+    # timeframe) when backfilling -- bounded, never "however many bars the
+    # gap implies," so a very long outage still costs one bounded REST call.
+    gap_fill_lookback_bars: int = 20
+
     def __post_init__(self) -> None:
         if self.priority_interval_multiplier is None:
             object.__setattr__(

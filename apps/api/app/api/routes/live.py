@@ -54,6 +54,17 @@ _PRIORITY_BY_NAME = {p.value: p for p in SubscriptionPriority}
 # subscriptions), unchanged from Phase 12.1.
 _USER_SCOPED_FRAME_TYPES = frozenset({"alert_event", "decision_state_change", "monitor_status"})
 
+# Phase 17 (§2/§92): every outbound frame carries a schema_version so the
+# frontend (and any future non-browser consumer) can detect a breaking
+# frame-shape change instead of silently misparsing it. Bump this whenever
+# an existing frame TYPE's fields change meaning/shape -- adding a brand
+# new frame `type` does not require a bump.
+WS_SCHEMA_VERSION = 1
+
+
+async def _send_frame(websocket: WebSocket, frame: dict) -> None:
+    await websocket.send_json({"schema_version": WS_SCHEMA_VERSION, **frame})
+
 
 class SubscribeMessage(BaseModel):
     action: Literal["subscribe"]
@@ -170,8 +181,21 @@ def live_status(request: Request) -> dict:
         # (Phase 12.2 §O) truthful, not "WebSocket transport used therefore
         # real-time" -- False whenever no streaming provider is actually
         # configured/available, in which case connection_status still
-        # reflects the Phase 12.1 poll loop.
+        # reflects the Phase 12.1 poll loop. This is a TECHNICAL fact only
+        # (connection running); it is NOT entitlement-gated -- see
+        # "real_time_available" below for the user-facing REAL TIME signal.
         "streaming_active": live_service.is_streaming(),
+        # Phase 17 (§1/§39): the ONLY field the frontend may treat as "may
+        # show REAL TIME" -- true only when a streaming connection is
+        # actually running AND the configured account has confirmed
+        # entitlement (see app.live.entitlement). Never derived from
+        # streaming_active alone.
+        "real_time_available": live_service.real_time_available(),
+        "entitlement": {
+            "provider": live_service.entitlement().provider,
+            "status": live_service.entitlement().status.value,
+            "reason": live_service.entitlement().reason,
+        },
         "connection_status": live_service.connection_status().model_dump(mode="json"),
         "latency": [
             {
@@ -350,7 +374,7 @@ async def live_stream(websocket: WebSocket) -> None:
                 symbol = frame.get("symbol")
                 if symbol is not None and symbol not in subscribed_symbols:
                     continue
-            await websocket.send_json(frame)
+            await _send_frame(websocket, frame)
 
     writer_task = asyncio.create_task(_writer())
 
@@ -404,9 +428,9 @@ async def live_stream(websocket: WebSocket) -> None:
                     await live_service.unsubscribe(message.symbol)
                     subscribed_symbols.discard(message.symbol)
                 else:
-                    await websocket.send_json({"type": "error", "detail": f"Unknown action {action!r}"})
+                    await _send_frame(websocket, {"type": "error", "detail": f"Unknown action {action!r}"})
             except (ValidationError, ValueError) as exc:
-                await websocket.send_json({"type": "error", "detail": str(exc)})
+                await _send_frame(websocket, {"type": "error", "detail": str(exc)})
     except WebSocketDisconnect:
         pass
     finally:

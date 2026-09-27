@@ -51,6 +51,24 @@ describe("SettingsPage (Phase 16.1)", () => {
       { alert_type: "invalidated", enabled: true },
     ]);
     vi.spyOn(api, "listMonitoring").mockResolvedValue([{ symbol: "NVDA", enabled: true, preferred_timeframes: [], decision_monitoring_enabled: true, added_at: "2026-01-01T00:00:00Z" }]);
+    vi.spyOn(api, "getLiveStatus").mockResolvedValue({
+      capabilities: {
+        real_time_quotes: false,
+        streaming_quotes: false,
+        streaming_trades: false,
+        streaming_bars: false,
+        streaming_news: false,
+        historical_intraday: false,
+        quote_delay_seconds: null,
+        news_delay_seconds: null,
+        min_poll_interval_seconds: 5,
+      },
+      streaming_active: false,
+      real_time_available: false,
+      entitlement: { provider: "yfinance", status: "not_entitled", reason: "No streaming implementation." },
+      connection_status: { state: "disconnected", last_message_at: null, reconnect_attempts: 0, subscribed_symbols: [] },
+      latency: [],
+    });
   });
 
   it("renders the signed-in user's account details", async () => {

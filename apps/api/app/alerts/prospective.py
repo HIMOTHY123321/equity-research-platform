@@ -40,6 +40,7 @@ All five must agree for an alert to be prospectively eligible.
 from __future__ import annotations
 
 from app.alerts.schemas import AlertEvent, AlertOrigin, AlertType
+from app.config import get_settings
 from app.decision_engine.repository import DecisionEngineRepository
 
 # ENTRY/STRENGTHENING/WEAKENING/EXIT/INVALIDATED per §33 -- the five
@@ -71,7 +72,24 @@ _FIXTURE_SETUP_ID_PREFIX = "fixture:"
 def is_prospective_eligible(alert: AlertEvent, decision_repository: DecisionEngineRepository) -> bool:
     """Provenance-derived eligibility (§Phase-14.1-4) -- never trusts
     `alert.origin` alone. `decision_repository` is the independent source
-    of truth an alert's claimed provenance is checked against."""
+    of truth an alert's claimed provenance is checked against.
+
+    Phase 17 (§80, CRITICAL): a decision plan/alert built from
+    app.live.mock_streaming.MockStreamingProvider's synthetic events (the
+    dev-only /api/dev/live-simulator) must never count as research, even
+    though it is otherwise indistinguishable from a real plan -- it has a
+    real, non-fixture setup_id and a real persisted DecisionPlan, since the
+    mock provider's events flow through the exact same
+    LiveMarketService/RecomputationEngine/DecisionEngine pipeline real
+    market data does (that's the point -- realistic UX preview). The one
+    thing that DOES distinguish it is process-wide: whenever this process
+    is running with the dev simulator enabled, NOTHING it observes is
+    eligible, full stop -- checked fresh on every call, not cached, so a
+    process that starts with the simulator on and is later reconfigured
+    picks up the change immediately."""
+    settings = get_settings()
+    if settings.enable_dev_live_simulator:
+        return False
     if alert.origin != AlertOrigin.LIVE_PROSPECTIVE:
         return False
     if alert.alert_type not in PROSPECTIVE_ELIGIBLE_ALERT_TYPES:

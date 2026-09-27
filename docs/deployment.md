@@ -58,6 +58,42 @@ the same real secret.
 `WORKER_MODE` (`combined` | `api` | `worker`) controls whether this
 process starts the background monitors -- see the next section.
 
+## Activating a licensed real-time provider (Phase 17)
+
+This application is built to be TECHNICALLY READY for licensed real-time
+streaming without ever having claimed it dishonestly in the meantime (see
+ADR 0021). Activation requires no code changes -- only configuration, and
+only by an eligible contracting party:
+
+1. **Confirm eligibility.** The account holder entering the provider
+   contract must be an adult authorized to do so (parent/guardian on the
+   product owner's behalf, an adult business entity, or the product owner
+   once legally eligible) -- never the product owner misrepresenting age,
+   and never a personal/noncommercial entitlement redistributed
+   commercially.
+2. **Obtain a real Massive account and API key**, and set
+   `MARKET_DATA_PROVIDER=massive` and `MASSIVE_API_KEY=<the real key>`.
+   At this point the app will connect and authenticate, but
+   `/api/live/status`'s `entitlement.status` will read `unknown` --
+   correctly, since a valid key alone never proves plan tier.
+3. **Confirm the account's actual plan tier** directly with the provider
+   (their dashboard/sales contact, not inferred from the app). Only once
+   that's confirmed, set `MASSIVE_STREAMING_ENTITLED=true` (or `false` if
+   the plan does NOT include real-time streaming -- setting this
+   explicitly to `false` is still correct and better than leaving it
+   unset, since it silences the "unknown, please confirm" state).
+4. **Verify** `/api/live/status` now reports `entitlement.status: "entitled"`
+   and `real_time_available: true` once a streaming connection is also
+   up. The frontend's REAL TIME indicator (`useStreamingActive`) will
+   only ever show for symbols actually being streamed while this holds.
+5. **Never** set `ENABLE_DEV_LIVE_SIMULATOR=true` in this or any
+   production-adjacent environment (the config validator already refuses
+   to start with both `ENVIRONMENT=production` and that flag set).
+
+No entitlement flag needs to be touched for yfinance/Alpaca (neither is
+ever treated as streaming-entitled; `resolve_streaming_entitlement` only
+ever resolves `ENTITLED` for provider `"massive"`).
+
 ## Worker model
 
 Background services (`LiveMarketService`, `RecomputationEngine`,

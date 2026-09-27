@@ -76,6 +76,13 @@ class LiveCandle(BaseModel):
     volume: float
     state: CandleState
     freshness: FreshnessInfo
+    # Phase 17 (§18/§44): True only for a CLOSED bar backfilled from REST
+    # historical data after a genuine reconnect gap (see
+    # LiveMarketService._gap_fill_symbol) -- never set on a bar built from
+    # live quote/trade folding. This is provenance, not a different kind of
+    # candle: a gap-filled bar is still a real, provider-reported bar, never
+    # a fabricated one built by guessing at missed individual trades.
+    gap_filled: bool = False
 
 
 class ConnectionState(str, Enum):

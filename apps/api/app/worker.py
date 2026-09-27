@@ -19,6 +19,7 @@ import logging
 import signal
 
 from app.api.deps import (
+    get_market_data_entitlement,
     get_market_data_provider,
     get_news_provider,
     get_session_factory,
@@ -45,6 +46,7 @@ async def run_worker() -> None:
     market_provider = get_market_data_provider()
     news_provider = get_news_provider()
     streaming_provider = get_streaming_provider()
+    entitlement = get_market_data_entitlement()
     cache = get_shared_market_data_cache()
     session_factory = get_session_factory()
 
@@ -53,6 +55,7 @@ async def run_worker() -> None:
         provider_name=settings.market_data_provider,
         config=DEFAULT_LIVE_CONFIG,
         streaming_provider=streaming_provider,
+        entitlement=entitlement,
     )
     recompute_engine = RecomputationEngine(live_service, market_provider, cache)
     forecast_monitor = ForecastMonitor(

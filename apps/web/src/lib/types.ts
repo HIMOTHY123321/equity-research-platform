@@ -1561,6 +1561,9 @@ export interface LiveCandle {
   volume: number;
   state: CandleStateKind;
   freshness: FreshnessInfo;
+  // Phase 17 (§18/§44): true only for a CLOSED bar backfilled from REST
+  // historical data after a genuine reconnect gap -- never a fabricated bar.
+  gap_filled: boolean;
 }
 
 export type ConnectionStateKind = "connected" | "resyncing" | "disconnected";
@@ -1595,12 +1598,27 @@ export interface LiveLatencySummary {
   max_seconds: number;
 }
 
+export type MarketDataEntitlementStatus = "entitled" | "not_entitled" | "unknown" | "misconfigured";
+
+export interface MarketDataEntitlementInfo {
+  provider: string;
+  status: MarketDataEntitlementStatus;
+  reason: string;
+}
+
 export interface LiveStatusResponse {
   capabilities: LiveProviderCapabilities;
   // Truthful even when the backend connection itself is healthy (§5):
   // false whenever no genuinely push-streaming provider is configured,
-  // regardless of how fresh polled data happens to be.
+  // regardless of how fresh polled data happens to be. This is a
+  // TECHNICAL fact only -- see real_time_available below for whether
+  // REAL TIME may actually be shown to the user.
   streaming_active: boolean;
+  // Phase 17 (§1/§39): the ONLY field the UI may treat as "show REAL
+  // TIME" -- true only when streaming_active AND the account carries a
+  // confirmed entitlement (see entitlement below).
+  real_time_available: boolean;
+  entitlement: MarketDataEntitlementInfo;
   connection_status: LiveConnectionStatus;
   latency: LiveLatencySummary[];
 }

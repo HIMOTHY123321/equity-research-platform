@@ -10,6 +10,7 @@ import {
   disableMonitoring,
   enableMonitoring,
   getAlertPreferences,
+  getLiveStatus,
   getMyPlan,
   getSystemStatus,
   listMonitoring,
@@ -17,7 +18,7 @@ import {
   type PlanOut,
   type SystemStatus,
 } from "@/lib/api";
-import type { AlertPreference, MonitoringSubscription } from "@/lib/types";
+import type { AlertPreference, LiveStatusResponse, MonitoringSubscription } from "@/lib/types";
 
 const ALERT_TYPE_LABELS: Record<string, string> = {
   plan_created: "Plan created",
@@ -157,12 +158,23 @@ function PlanSection() {
   );
 }
 
+const ENTITLEMENT_LABELS: Record<string, string> = {
+  entitled: "Entitled",
+  not_entitled: "Not entitled",
+  unknown: "Unknown (unconfirmed)",
+  misconfigured: "Misconfigured",
+};
+
 function ProviderStatusSection() {
   const [status, setStatus] = useState<SystemStatus | null>(null);
+  const [liveStatus, setLiveStatus] = useState<LiveStatusResponse | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     getSystemStatus().then((s) => !cancelled && setStatus(s));
+    getLiveStatus()
+      .then((s) => !cancelled && setLiveStatus(s))
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
@@ -191,6 +203,23 @@ function ProviderStatusSection() {
         <dd>{status.ai_analysis.provider}</dd>
         <dt className="text-muted">Environment</dt>
         <dd>{status.environment}</dd>
+        {liveStatus && (
+          <>
+            <dt className="text-muted">Streaming entitlement</dt>
+            <dd>
+              {ENTITLEMENT_LABELS[liveStatus.entitlement.status] ?? liveStatus.entitlement.status}
+              <span className="ml-2 text-[10px] text-muted">({liveStatus.entitlement.reason})</span>
+            </dd>
+            <dt className="text-muted">Real-time data</dt>
+            <dd>
+              {liveStatus.real_time_available ? (
+                <span className="text-positive">Available</span>
+              ) : (
+                <span className="text-muted">Not available -- showing latest available data only</span>
+              )}
+            </dd>
+          </>
+        )}
       </dl>
     </Section>
   );

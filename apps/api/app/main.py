@@ -10,6 +10,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.deps import (
+    get_dev_mock_streaming_provider,
+    get_market_data_entitlement,
     get_market_data_provider,
     get_news_provider,
     get_session_factory,
@@ -22,6 +24,7 @@ from app.api.routes import (
     auth,
     billing,
     decisions,
+    dev_live,
     forecasts,
     health,
     live,
@@ -39,6 +42,7 @@ from app.config import get_settings
 from app.database.models import Base
 from app.database.session import engine
 from app.live.config import DEFAULT_LIVE_CONFIG
+from app.live.entitlement import resolve_streaming_entitlement
 from app.live.forecast_monitor import ForecastMonitor
 from app.live.news_monitor import NewsMonitor
 from app.live.recompute import RecomputationEngine
@@ -93,6 +97,28 @@ async def lifespan(app: FastAPI):
     # LiveMarketService transparently falls back to its Phase 12.1
     # per-symbol poll loop in that case.
     streaming_provider = app.dependency_overrides.get(get_streaming_provider, get_streaming_provider)()
+    # Phase 17 (§1/§27): resolved via the same override point so tests can
+    # inject a deterministic entitlement instead of always reading env config.
+    entitlement = app.dependency_overrides.get(get_market_data_entitlement, get_market_data_entitlement)()
+    # Phase 17 (§60/§79/§99): when the dev-only mock simulator is enabled
+    # (impossible in production -- see Settings._validate_production_safety
+    # and get_dev_mock_streaming_provider), it REPLACES the real streaming
+    # provider so /api/dev/live-simulator's synthetic events actually flow
+    # through the real LiveMarketService/RecomputationEngine pipeline for UX
+    # preview. provider_name becomes "mock" so app.live.entitlement never
+    # resolves this as ENTITLED (only "massive" ever can) -- a mock stream
+    # can never masquerade as a licensed, entitled REAL TIME feed.
+    dev_mock_provider = app.dependency_overrides.get(
+        get_dev_mock_streaming_provider, get_dev_mock_streaming_provider
+    )()
+    provider_name = settings.market_data_provider
+    if dev_mock_provider is not None:
+        streaming_provider = dev_mock_provider
+        provider_name = "mock"
+        entitlement = resolve_streaming_entitlement(
+            provider_name=provider_name, api_key="", streaming_entitled_flag=None
+        )
+        app.state.dev_mock_streaming_provider = dev_mock_provider
     cache = get_shared_market_data_cache()
     live_config = getattr(app.state, "live_config", DEFAULT_LIVE_CONFIG)
     # Phase 14.1: routed through the same override point as every other
@@ -109,9 +135,10 @@ async def lifespan(app: FastAPI):
 
     live_service = LiveMarketService(
         market_provider,
-        provider_name=settings.market_data_provider,
+        provider_name=provider_name,
         config=live_config,
         streaming_provider=streaming_provider,
+        entitlement=entitlement,
     )
     recompute_engine = RecomputationEngine(live_service, market_provider, cache)
     forecast_monitor = ForecastMonitor(session_factory, market_provider, news_provider, config=live_config)
@@ -192,6 +219,7 @@ app.include_router(symbols.router)
 app.include_router(alerts.router)
 app.include_router(monitoring.router)
 app.include_router(validation.router)
+app.include_router(dev_live.router)
 
 
 @app.exception_handler(AuthenticationError)
