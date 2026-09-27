@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.api.deps import get_market_data_provider, get_news_provider, get_session_factory
+from app.database.session import get_db
 from app.live.config import LiveConfig
 from app.main import app
 from app.market_data.capabilities import ProviderCapabilities
@@ -132,12 +133,32 @@ class _StaticProvider(MarketDataProvider):
         return PreviousClose(symbol=symbol, trading_date=_BASE.date(), close=100.0, volume=1_000_000)
 
 
+def _isolated_get_db_override(file_session_factory):
+    """Phase 16: `/api/auth/signup` (used by `_authed_ws_url` below) goes
+    through `get_db`, which is otherwise never overridden in this file --
+    without this, a websocket-auth test would silently hit the real
+    on-disk dev database via the default `get_db`, exactly the risk
+    Phase 14.1's FileSessionFactory fix already exists to eliminate for
+    every other DB-touching dependency here."""
+    session_factory = file_session_factory()
+
+    def _get_db_override():
+        db = session_factory()
+        try:
+            yield db
+        finally:
+            db.close()
+
+    return _get_db_override
+
+
 @pytest.fixture
 def client(file_session_factory):
     provider = _QueueProvider()
     app.dependency_overrides[get_market_data_provider] = lambda: provider
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
     app.dependency_overrides[get_session_factory] = file_session_factory
+    app.dependency_overrides[get_db] = _isolated_get_db_override(file_session_factory)
     app.state.live_config = _FAST_CONFIG
     try:
         with TestClient(app) as test_client:
@@ -154,6 +175,7 @@ def static_client(file_session_factory):
     app.dependency_overrides[get_market_data_provider] = lambda: provider
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
     app.dependency_overrides[get_session_factory] = file_session_factory
+    app.dependency_overrides[get_db] = _isolated_get_db_override(file_session_factory)
     app.state.live_config = _FAST_CONFIG
     try:
         with TestClient(app) as test_client:
@@ -198,6 +220,25 @@ def _receive_next_meaningful(ws, max_frames: int = 40) -> dict:
     return _receive_until(ws, count=1, max_frames=max_frames)[0]
 
 
+_ws_user_counter = 0
+
+
+def _authed_ws_url(test_client: TestClient, path: str = "/api/live/stream") -> str:
+    """Phase 16 (§32): /api/live/stream now requires a valid session token
+    on the handshake URL (the browser WebSocket API can't send an
+    Authorization header) -- signs up a fresh test user against the same
+    isolated per-test DB `test_client` already points at and returns the
+    URL with `?token=` appended."""
+    global _ws_user_counter
+    _ws_user_counter += 1
+    response = test_client.post(
+        "/api/auth/signup",
+        json={"email": f"ws-test-{_ws_user_counter}@example.com", "password": "hunter2hunter2"},
+    )
+    token = response.json()["access_token"]
+    return f"{path}?token={token}"
+
+
 def test_status_endpoint_reports_provider_capabilities(client):
     test_client, _provider = client
     response = test_client.get("/api/live/status")
@@ -207,9 +248,27 @@ def test_status_endpoint_reports_provider_capabilities(client):
     assert "connection_status" in body
 
 
+def test_websocket_connect_without_a_token_is_rejected(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    test_client, _provider = client
+    with pytest.raises(WebSocketDisconnect):
+        with test_client.websocket_connect("/api/live/stream"):
+            pass
+
+
+def test_websocket_connect_with_a_garbage_token_is_rejected(client):
+    from starlette.websockets import WebSocketDisconnect
+
+    test_client, _provider = client
+    with pytest.raises(WebSocketDisconnect):
+        with test_client.websocket_connect("/api/live/stream?token=not-a-real-token"):
+            pass
+
+
 def test_subscribing_receives_a_connection_status_then_a_quote(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         frames = _receive_until(ws, count=3)
         types_seen = {f["type"] for f in frames}
@@ -222,7 +281,7 @@ def test_subscribing_receives_a_connection_status_then_a_quote(client):
 
 def test_a_forming_candle_frame_follows_the_quote(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         frames = _receive_until(ws, count=4)
         assert any(f["type"] == "forming_candle" for f in frames)
@@ -235,7 +294,7 @@ def test_a_new_connection_receives_the_current_connection_status_immediately(cli
     # earlier subscriber must still learn the current state right away,
     # not sit on a client-side default of DISCONNECTED forever.
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws1:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws1:
         ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         first = ws1.receive_json()
         assert first["type"] == "connection_status"
@@ -247,7 +306,7 @@ def test_a_new_connection_receives_the_current_connection_status_immediately(cli
             if frame["type"] == "connection_status" and frame["status"]["state"] == "connected":
                 break
 
-        with test_client.websocket_connect("/api/live/stream") as ws2:
+        with test_client.websocket_connect(_authed_ws_url(test_client)) as ws2:
             snapshot = ws2.receive_json()
             assert snapshot["type"] == "connection_status"
             assert snapshot["status"]["state"] == "connected"
@@ -263,12 +322,12 @@ def test_a_new_connection_gets_the_already_known_quote_even_with_no_new_data(sta
     # "no quote yet" until the underlying data source happens to change
     # (which for yfinance can be minutes away).
     test_client, _provider = static_client
-    with test_client.websocket_connect("/api/live/stream") as ws1:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws1:
         ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         frames = _receive_until(ws1, count=3)
         assert any(f["type"] == "quote" for f in frames)
 
-        with test_client.websocket_connect("/api/live/stream") as ws2:
+        with test_client.websocket_connect(_authed_ws_url(test_client)) as ws2:
             ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
             second_connection_frames = _receive_until(ws2, count=2)
             quote_frame = next(f for f in second_connection_frames if f["type"] == "quote")
@@ -278,10 +337,10 @@ def test_a_new_connection_gets_the_already_known_quote_even_with_no_new_data(sta
 
 def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws1:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws1:
         ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         ws1.receive_json()
-        with test_client.websocket_connect("/api/live/stream") as ws2:
+        with test_client.websocket_connect(_authed_ws_url(test_client)) as ws2:
             ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
             ws2.receive_json()
             assert len(app.state.live_service._tasks) == 1
@@ -289,7 +348,7 @@ def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):
 
 def test_unrecognized_action_returns_an_error_frame_not_a_crash(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         _receive_next_meaningful(ws)  # initial connection_status snapshot
         ws.send_json({"action": "bogus"})
         frame = _receive_next_meaningful(ws)
@@ -298,7 +357,7 @@ def test_unrecognized_action_returns_an_error_frame_not_a_crash(client):
 
 def test_malformed_subscribe_message_returns_an_error_frame(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         _receive_next_meaningful(ws)  # initial connection_status snapshot
         ws.send_json({"action": "subscribe"})  # missing required "symbol"
         frame = _receive_next_meaningful(ws)
@@ -307,14 +366,14 @@ def test_malformed_subscribe_message_returns_an_error_frame(client):
 
 def test_heartbeat_frames_arrive_on_the_configured_interval(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         frames = _receive_until(ws, count=3, skip=_UNIVERSE_WIDE_TYPES)
         assert any(f["type"] == "heartbeat" for f in frames)
 
 
 def test_disconnect_cleans_up_the_subscription(client):
     test_client, _provider = client
-    with test_client.websocket_connect("/api/live/stream") as ws:
+    with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
         ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         ws.receive_json()
     status = test_client.get("/api/live/status").json()

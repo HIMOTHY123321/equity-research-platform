@@ -12,7 +12,6 @@ from app.alerts.repository import SqlAlchemyAlertRepository
 from app.alerts.schemas import AlertType
 from app.alerts.service import AlertService
 from app.monitoring.service import MonitoringService
-from app.watchlist.repository import InMemoryWatchlistRepository
 from tests.unit.ai_analysis.conftest import make_session
 
 # 2026-01-05 is a Monday; 15:00 UTC = 10:00 America/New_York, regular session.
@@ -20,8 +19,7 @@ _REGULAR_SESSION_AS_OF = datetime(2026, 1, 5, 15, 0, tzinfo=timezone.utc)
 
 
 def _service() -> MonitoringService:
-    watchlist = InMemoryWatchlistRepository(initial_symbols=())
-    return MonitoringService(make_session, watchlist, market_provider=None)
+    return MonitoringService(make_session, market_provider=None)
 
 
 def _snapshot(candle_age_seconds: float, as_of: datetime):

@@ -1,0 +1,71 @@
+# Phase 16 (§81/§82/§131): CI -- backend tests, frontend tests, ruff,
+# ESLint, tsc, and a production frontend build, on every push/PR.
+#
+# Deliberately excludes (§83): live-provider smoke tests (real yfinance/
+# Alpaca/Massive network calls) and the docker-compose Postgres smoke test
+# -- both belong in a separate, manually/scheduled-triggered workflow so a
+# flaky third-party provider or missing Docker runner never blocks an
+# ordinary PR. Test isolation discipline (no stray dev servers, no real
+# on-disk DB, background services disabled unless a test explicitly opts
+# in) is already enforced at the test-suite level (Phase 14.1) -- CI adds
+# no special-casing on top of that.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: apps/api/requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Ruff
+        run: ruff check .
+
+      - name: pytest
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: tsc
+        run: npx tsc --noEmit
+
+      - name: Vitest
+        run: npm test
+
+      - name: Production build
+        run: npm run build

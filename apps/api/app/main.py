@@ -15,13 +15,15 @@ from app.api.deps import (
     get_session_factory,
     get_shared_market_data_cache,
     get_streaming_provider,
-    get_watchlist_repository,
 )
 from app.api.routes import (
     alerts,
     analysis,
+    auth,
+    billing,
     decisions,
     forecasts,
+    health,
     live,
     market,
     monitoring,
@@ -49,6 +51,7 @@ from app.market_data.exceptions import (
     RateLimitError,
 )
 from app.monitoring.service import MonitoringService
+from app.observability import RequestIDMiddleware, StructuredLoggingMiddleware, install_error_handlers
 
 settings = get_settings()
 
@@ -116,16 +119,13 @@ async def lifespan(app: FastAPI):
 
     # Phase 14: the background monitor that finally drives the Decision
     # Engine across a whole configurable universe rather than only ever
-    # reacting to a manual `/scan` click (§11). Shares the same process-wide
-    # WatchlistRepository singleton every /api/watchlist request uses, so
-    # what it seeds the monitoring universe from is the user's actual
-    # watchlist, not a second divergent one.
-    watchlist_repository = app.dependency_overrides.get(
-        get_watchlist_repository, get_watchlist_repository
-    )()
-    monitoring_service = MonitoringService(
-        session_factory, watchlist_repository, market_provider, config=live_config
-    )
+    # reacting to a manual `/scan` click (§11). Phase 16 (§9/§97): the
+    # monitoring universe it scans is a global, fixed-default-seeded set
+    # (app.monitoring.universe.MonitoringUniverse), decoupled from any
+    # single user's now-per-user Watchlist -- this background service runs
+    # entirely outside any HTTP request/user context, so it can never
+    # resolve "whose watchlist" in the first place.
+    monitoring_service = MonitoringService(session_factory, market_provider, config=live_config)
 
     app.state.live_service = live_service
     app.state.recompute_engine = recompute_engine
@@ -134,22 +134,37 @@ async def lifespan(app: FastAPI):
     app.state.monitoring_service = monitoring_service
     app.state.alert_event_bus = monitoring_service.event_bus
 
-    await recompute_engine.start()
-    await forecast_monitor.start()
-    await news_monitor.start()
-    await monitoring_service.start()
+    # Phase 16 (§8/§28/§29): in "api" mode (a web replica behind a load
+    # balancer, with a separate "worker" process/replica actually running
+    # the monitors), every service above is still constructed -- so
+    # /api/live/status and friends have real objects to read -- but never
+    # started, so this replica never runs a second, duplicate copy of any
+    # global background loop. "combined" (the default) starts everything,
+    # exactly as before this setting existed.
+    runs_background_workers = settings.runs_background_workers
+    if runs_background_workers:
+        await recompute_engine.start()
+        await forecast_monitor.start()
+        await news_monitor.start()
+        await monitoring_service.start()
 
     try:
         yield
     finally:
-        await monitoring_service.stop()
-        await news_monitor.stop()
-        await forecast_monitor.stop()
-        await recompute_engine.stop()
+        if runs_background_workers:
+            await monitoring_service.stop()
+            await news_monitor.stop()
+            await forecast_monitor.stop()
+            await recompute_engine.stop()
         await live_service.shutdown()
 
 
 app = FastAPI(title="AI Market Desk API", version="0.1.0", lifespan=lifespan)
+
+install_error_handlers(app)
+
+app.add_middleware(StructuredLoggingMiddleware)
+app.add_middleware(RequestIDMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
@@ -159,6 +174,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(auth.router)
+app.include_router(billing.router)
+app.include_router(health.router)
 app.include_router(market.router)
 app.include_router(watchlist.router)
 app.include_router(research.router)

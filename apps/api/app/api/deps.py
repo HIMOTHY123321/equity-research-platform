@@ -13,7 +13,11 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import TYPE_CHECKING, Optional
 
+from fastapi import Depends
+
+from app.auth.dependencies import get_current_user
 from app.config import get_settings
+from app.database.session import get_db
 from app.market_data.alpaca_provider import AlpacaMarketDataProvider
 from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
@@ -23,10 +27,13 @@ from app.market_data.yfinance_provider import YFinanceMarketDataProvider
 from app.news.fixture_provider import FixtureNewsProvider
 from app.news.provider import NewsProvider
 from app.news.yfinance_provider import YFinanceNewsProvider
-from app.watchlist.repository import InMemoryWatchlistRepository, WatchlistRepository
+from app.watchlist.repository import SqlAlchemyWatchlistRepository, WatchlistRepository
 
 if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
+
     from app.ai_analysis.provider import AIAnalysisProvider
+    from app.database.models import User
     from app.live.streaming import StreamingMarketDataProvider
 
 
@@ -81,9 +88,17 @@ def get_streaming_provider() -> "Optional[StreamingMarketDataProvider]":
     return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
 
 
-@lru_cache
-def get_watchlist_repository() -> WatchlistRepository:
-    return InMemoryWatchlistRepository()
+def get_watchlist_repository(
+    current_user: "User" = Depends(get_current_user),
+    db: "Session" = Depends(get_db),
+) -> WatchlistRepository:
+    """Phase 16 (§9/§96): the personal, per-user Watchlist -- every query
+    this repository makes is scoped to `current_user.id`, resolved only
+    from a validated session token, never from a caller-supplied id. This
+    is intentionally NOT the dependency the global monitoring universe
+    uses (see app.monitoring.universe.MonitoringUniverse, which no longer
+    depends on any WatchlistRepository at all)."""
+    return SqlAlchemyWatchlistRepository(db, user_id=current_user.id)
 
 
 @lru_cache

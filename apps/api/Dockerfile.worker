@@ -1,0 +1,25 @@
+# Phase 16 (§8/§28/§29/§78): the standalone background-worker image --
+# identical to Dockerfile except for CMD. Run exactly ONE of these per
+# environment (never one per web replica) alongside any number of
+# Dockerfile-based "api"-mode web replicas -- see app.config.Settings
+# .worker_mode's own docstring for why running more than one would
+# duplicate every global background scan.
+
+FROM python:3.11-slim AS base
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends libpq5 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY . .
+
+RUN useradd --create-home --uid 1000 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
+
+CMD ["python", "-m", "app.worker"]

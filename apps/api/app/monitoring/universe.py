@@ -1,8 +1,20 @@
 """The monitoring universe (§8/§22): which symbols the background monitor
 scans, independent of mere Watchlist membership. Persisted via
 MonitoringSubscriptionRecord (through AlertRepository) rather than
-hard-coded, and seeded from the existing Watchlist the first time it is
-empty -- never SPY/QQQ/NVDA-only.
+hard-coded, and seeded from a fixed default symbol list the first time it
+is empty -- never SPY/QQQ/NVDA-only.
+
+Phase 16 (§9/§97): this seed is now a plain constant, not a live
+Watchlist lookup. MonitoringSubscriptionRecord is genuinely global/shared
+(one server-wide "which symbols does the Decision Engine actively scan"
+universe), while Watchlist is now per-user (see
+app.watchlist.repository.SqlAlchemyWatchlistRepository) -- coupling a
+global background service's seed to any one user's personal watchlist
+would either pick an arbitrary user or require this class to run in a
+request context it doesn't have (this seed also runs from the FastAPI
+lifespan, entirely outside any HTTP request/user). A future refinement
+could seed from the union of every user's watchlist instead; deferred and
+disclosed rather than half-implemented under time pressure.
 """
 
 from __future__ import annotations
@@ -11,24 +23,26 @@ from datetime import datetime, timezone
 
 from app.alerts.repository import AlertRepository
 from app.alerts.schemas import MonitoringSubscription
-from app.watchlist.repository import WatchlistRepository
+from app.watchlist.repository import DEFAULT_WATCHLIST_SYMBOLS
 
 
 class MonitoringUniverse:
-    def __init__(self, repository: AlertRepository, watchlist: WatchlistRepository) -> None:
+    def __init__(
+        self, repository: AlertRepository, default_symbols: tuple[str, ...] = DEFAULT_WATCHLIST_SYMBOLS
+    ) -> None:
         self._repository = repository
-        self._watchlist = watchlist
+        self._default_symbols = default_symbols
 
     def list_enabled_symbols(self) -> list[str]:
         """The set of symbols the monitor actually scans. Seeds itself from
-        the Watchlist exactly once, the first time no subscriptions exist at
-        all, so a fresh deployment still monitors something without
+        `default_symbols` exactly once, the first time no subscriptions exist
+        at all, so a fresh deployment still monitors something without
         hard-coding a fixed ticker list; after that, this table alone is the
         source of truth and Watchlist membership no longer implies
         monitoring."""
         subscriptions = self._repository.list_monitoring_subscriptions()
         if not subscriptions:
-            subscriptions = self._seed_from_watchlist()
+            subscriptions = self._seed_defaults()
         return sorted(s.symbol for s in subscriptions if s.enabled and s.decision_monitoring_enabled)
 
     def is_monitored(self, symbol: str) -> bool:
@@ -40,7 +54,7 @@ class MonitoringUniverse:
         disabled row rather than nothing at all."""
         subscriptions = self._repository.list_monitoring_subscriptions()
         if not subscriptions:
-            subscriptions = self._seed_from_watchlist()
+            subscriptions = self._seed_defaults()
         return sorted(subscriptions, key=lambda s: s.symbol)
 
     def enable(self, symbol: str, *, preferred_timeframes: list[str] | None = None) -> MonitoringSubscription:
@@ -72,11 +86,11 @@ class MonitoringUniverse:
                 return s
         return None
 
-    def _seed_from_watchlist(self) -> list[MonitoringSubscription]:
+    def _seed_defaults(self) -> list[MonitoringSubscription]:
         now = datetime.now(timezone.utc)
         seeded = []
-        for entry in self._watchlist.list_symbols():
-            subscription = MonitoringSubscription(symbol=entry.ticker, enabled=True, added_at=now)
+        for ticker in self._default_symbols:
+            subscription = MonitoringSubscription(symbol=ticker, enabled=True, added_at=now)
             self._repository.upsert_monitoring_subscription(subscription)
             seeded.append(subscription)
         return seeded

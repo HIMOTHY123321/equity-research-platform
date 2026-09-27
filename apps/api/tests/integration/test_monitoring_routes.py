@@ -8,10 +8,9 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from app.api.deps import get_watchlist_repository
 from app.database.session import get_db
 from app.main import app
-from app.watchlist.repository import InMemoryWatchlistRepository
+from app.watchlist.repository import DEFAULT_WATCHLIST_SYMBOLS
 
 
 @pytest.fixture
@@ -29,19 +28,19 @@ def client():
             db.close()
 
     app.dependency_overrides[get_db] = _get_db_override
-    app.dependency_overrides[get_watchlist_repository] = lambda: InMemoryWatchlistRepository(
-        initial_symbols=("SPY", "QQQ")
-    )
     yield TestClient(app)
     app.dependency_overrides.clear()
 
 
-def test_list_monitoring_seeds_from_watchlist(client):
+def test_list_monitoring_seeds_from_default_symbols(client):
+    # Phase 16 (§9/§97): the monitoring universe now seeds from a fixed
+    # global default (DEFAULT_WATCHLIST_SYMBOLS), never from any single
+    # user's personal (now per-user, auth-required) Watchlist.
     response = client.get("/api/monitoring")
 
     assert response.status_code == 200
     symbols = {s["symbol"] for s in response.json()}
-    assert symbols == {"SPY", "QQQ"}
+    assert symbols == set(DEFAULT_WATCHLIST_SYMBOLS)
     assert all(s["enabled"] for s in response.json())
 
 
@@ -60,10 +59,11 @@ def test_disable_then_enable_monitoring_round_trips(client):
     assert after_enable["SPY"] is True
 
 
-def test_enable_monitoring_for_new_symbol_not_in_watchlist(client):
-    response = client.post("/api/monitoring/NVDA")
+def test_enable_monitoring_for_new_symbol_not_in_default_universe(client):
+    assert "IBM" not in DEFAULT_WATCHLIST_SYMBOLS
+    response = client.post("/api/monitoring/IBM")
 
     assert response.status_code == 200
-    assert response.json()["symbol"] == "NVDA"
+    assert response.json()["symbol"] == "IBM"
     symbols = {s["symbol"] for s in client.get("/api/monitoring").json()}
-    assert "NVDA" in symbols
+    assert "IBM" in symbols

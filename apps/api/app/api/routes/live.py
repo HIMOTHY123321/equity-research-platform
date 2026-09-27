@@ -22,6 +22,9 @@ from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 
 from app.alerts.service import AlertEmittedEvent
+from app.auth.repository import SqlAlchemyUserRepository
+from app.auth.security import InvalidTokenError, decode_access_token
+from app.database.session import get_db
 from app.live.config import DEFAULT_LIVE_CONFIG, SubscriptionPriority
 from app.live.forecast_monitor import ForecastResolvedEvent
 from app.live.news_monitor import NewEvidenceEvent
@@ -177,8 +180,47 @@ def live_status(request: Request) -> dict:
     }
 
 
+def _authenticate_websocket_token(websocket: WebSocket, token: Optional[str]) -> bool:
+    """Phase 16 (§32): a validated session is required to open this
+    connection at all -- the browser WebSocket API cannot send an
+    Authorization header, so the token travels as `?token=` on the
+    handshake URL instead (the standard workaround; the token is short-
+    lived and per-connection, never a long-lived secret). The frames this
+    connection receives (quotes, candles, decision states, alerts) remain
+    the same global/shared market and monitoring stream for every
+    authenticated user today (see app.monitoring.universe's own docstring)
+    -- this check establishes WHO may connect, not yet a per-user content
+    filter; per-user AlertAcknowledgement/preference-scoped filtering is a
+    disclosed, deferred refinement (see the Phase 16 final report).
+
+    Resolves its DB session through `app.dependency_overrides` (same
+    pattern app.main.lifespan already uses for get_session_factory) rather
+    than importing SessionLocal directly, so this route respects the same
+    test-provided isolated-database override every other DB-touching
+    dependency does -- a raw `SessionLocal()` call here would silently hit
+    the real default database in tests instead."""
+    if not token:
+        return False
+    try:
+        user_id = decode_access_token(token)
+    except InvalidTokenError:
+        return False
+    get_db_override = websocket.app.dependency_overrides.get(get_db, get_db)
+    session_gen = get_db_override()
+    session = next(session_gen)
+    try:
+        user = SqlAlchemyUserRepository(session).get_by_id(user_id)
+        return user is not None and user.status == "active"
+    finally:
+        next(session_gen, None)  # let the generator's own finally: db.close() run
+
+
 @router.websocket("/stream")
 async def live_stream(websocket: WebSocket) -> None:
+    if not _authenticate_websocket_token(websocket, websocket.query_params.get("token")):
+        await websocket.close(code=4401)
+        return
+
     app_state = websocket.app.state
     live_service = app_state.live_service
     recompute_engine = getattr(app_state, "recompute_engine", None)

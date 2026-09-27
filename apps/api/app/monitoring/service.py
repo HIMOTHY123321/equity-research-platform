@@ -36,7 +36,7 @@ from app.live.market_hours import current_live_session
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.universe import MonitoringUniverse
 from app.schemas.market_data import Timeframe
-from app.watchlist.repository import WatchlistRepository
+from app.watchlist.repository import DEFAULT_WATCHLIST_SYMBOLS
 
 logger = logging.getLogger(__name__)
 
@@ -83,15 +83,15 @@ class MonitoringService:
     def __init__(
         self,
         session_factory: Callable[[], Session],
-        watchlist_repository: WatchlistRepository,
         market_provider: MarketDataProvider,
         event_bus: Optional[AlertEventBus] = None,
         config: LiveConfig = DEFAULT_LIVE_CONFIG,
         now_fn=lambda: datetime.now(timezone.utc),
+        default_symbols: tuple[str, ...] = DEFAULT_WATCHLIST_SYMBOLS,
     ) -> None:
         self._session_factory = session_factory
-        self._watchlist_repository = watchlist_repository
         self._market_provider = market_provider
+        self._default_symbols = default_symbols
         self.event_bus = event_bus or AlertEventBus()
         self._config = config
         self._now = now_fn
@@ -228,7 +228,7 @@ class MonitoringService:
         try:
             alert_repository = SqlAlchemyAlertRepository(session)
             decision_repository = SqlAlchemyDecisionEngineRepository(session)
-            universe = MonitoringUniverse(alert_repository, self._watchlist_repository)
+            universe = MonitoringUniverse(alert_repository, self._default_symbols)
             alert_service = AlertService(alert_repository, event_bus=self.event_bus)
 
             transitions: list[DecisionTransition] = []

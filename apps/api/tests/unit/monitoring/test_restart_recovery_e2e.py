@@ -18,7 +18,6 @@ from app.market_data.provider import MarketDataProvider
 from app.monitoring.service import MonitoringService
 from app.monitoring.universe import MonitoringUniverse
 from app.schemas.market_data import Candle, MarketSession, Timeframe
-from app.watchlist.repository import InMemoryWatchlistRepository
 from tests.unit.setup_detection.conftest import load_real_candles
 
 _RAW_SPY_1H = load_real_candles("SPY_1h")
@@ -61,13 +60,12 @@ class _FakeProvider(MarketDataProvider):
 
 def _new_service(file_session_factory, db_path: Path, symbols: tuple[str, ...]) -> MonitoringService:
     """A brand-new MonitoringService, brand-new session_factory, brand-new
-    watchlist repository, brand-new event bus -- nothing shared with any
-    previously-constructed instance, exactly what a real process restart
-    looks like. `file_session_factory` still tracks the fresh Engine this
-    creates (against the SAME db_path) so it gets disposed at teardown."""
+    event bus -- nothing shared with any previously-constructed instance,
+    exactly what a real process restart looks like. `file_session_factory`
+    still tracks the fresh Engine this creates (against the SAME db_path)
+    so it gets disposed at teardown."""
     session_factory = file_session_factory(db_path)
-    watchlist = InMemoryWatchlistRepository(initial_symbols=symbols)
-    return MonitoringService(session_factory, watchlist, _FakeProvider())
+    return MonitoringService(session_factory, _FakeProvider(), default_symbols=symbols)
 
 
 def test_alert_and_monitoring_state_all_survive_a_simulated_restart(file_session_factory):
@@ -120,11 +118,11 @@ def test_alert_and_monitoring_state_all_survive_a_simulated_restart(file_session
 def test_monitoring_subscription_survives_a_simulated_restart(file_session_factory):
     db_path = Path(tempfile.mkdtemp()) / "restart_monitoring_e2e.db"
 
-    watchlist = InMemoryWatchlistRepository(initial_symbols=("SPY", "NVDA"))
+    default_symbols = ("SPY", "NVDA")
 
     session_1 = file_session_factory(db_path)()
     alert_repo_1 = SqlAlchemyAlertRepository(session_1)
-    universe_1 = MonitoringUniverse(alert_repo_1, watchlist)
+    universe_1 = MonitoringUniverse(alert_repo_1, default_symbols)
     universe_1.disable("NVDA")
     assert universe_1.list_enabled_symbols() == ["SPY"]
     session_1.close()
@@ -132,7 +130,7 @@ def test_monitoring_subscription_survives_a_simulated_restart(file_session_facto
     # "restart": brand-new session/repository/universe over the same file.
     session_2 = file_session_factory(db_path)()
     alert_repo_2 = SqlAlchemyAlertRepository(session_2)
-    universe_2 = MonitoringUniverse(alert_repo_2, watchlist)
+    universe_2 = MonitoringUniverse(alert_repo_2, default_symbols)
     assert universe_2.list_enabled_symbols() == ["SPY"]  # NVDA's disabled state persisted
     session_2.close()
 

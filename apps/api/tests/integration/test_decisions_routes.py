@@ -183,7 +183,14 @@ def test_fixture_replay_route_is_unreachable_outside_development(client, monkeyp
     from app.config import Settings
 
     monkeypatch.setattr(
-        "app.api.routes.decisions.get_settings", lambda: Settings(environment="production")
+        "app.api.routes.decisions.get_settings", lambda: Settings(
+            environment="production",
+            secret_key="test-secret",
+            database_url="postgresql://user:pass@host/db",
+            market_data_provider="alpaca",
+            news_provider="fixture",
+            cors_origins="https://example.com",
+        )
     )
 
     response = client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
@@ -228,7 +235,14 @@ def test_fixture_replay_route_unreachable_in_production_creates_no_alerts_either
     from app.config import Settings
 
     monkeypatch.setattr(
-        "app.api.routes.decisions.get_settings", lambda: Settings(environment="production")
+        "app.api.routes.decisions.get_settings", lambda: Settings(
+            environment="production",
+            secret_key="test-secret",
+            database_url="postgresql://user:pass@host/db",
+            market_data_provider="alpaca",
+            news_provider="fixture",
+            cors_origins="https://example.com",
+        )
     )
 
     client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")

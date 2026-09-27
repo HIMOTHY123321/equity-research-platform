@@ -21,7 +21,7 @@ from sqlalchemy.orm import Session
 
 from app.alerts.repository import AlertRepository, SqlAlchemyAlertRepository
 from app.alerts.service import AlertService
-from app.api.deps import get_market_data_provider, get_watchlist_repository
+from app.api.deps import get_market_data_provider
 from app.api.routes.market import _validated_symbol, _validated_timeframe
 from app.config import get_settings
 from app.database.session import get_db
@@ -39,7 +39,6 @@ from app.decision_engine.schemas import TERMINAL_STATES, DecisionPlan, DecisionT
 from app.decision_engine.service import run_symbol_scan
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.universe import MonitoringUniverse
-from app.watchlist.repository import WatchlistRepository
 
 router = APIRouter(prefix="/api/decisions", tags=["decisions"])
 
@@ -50,9 +49,8 @@ def _alert_repository(db: Session = Depends(get_db)) -> AlertRepository:
 
 def _monitoring_universe(
     alert_repository: AlertRepository = Depends(_alert_repository),
-    watchlist: WatchlistRepository = Depends(get_watchlist_repository),
 ) -> MonitoringUniverse:
-    return MonitoringUniverse(alert_repository, watchlist)
+    return MonitoringUniverse(alert_repository)
 
 
 def _decision_repository(db: Session = Depends(get_db)) -> DecisionEngineRepository:

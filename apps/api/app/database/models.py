@@ -59,11 +59,27 @@ BACKTEST_STATUSES = ("pending", "running", "completed", "failed")
 
 
 class User(Base):
+    """Phase 16 (§12/§15/§48): the one real account row in the system.
+    `plan` is the ONLY entitlement-relevant field here -- a coarse plan
+    tier, never a per-feature flag list (see app.billing.entitlements for
+    the plan -> feature mapping, kept out of this table so adding a new
+    gated feature never requires a migration). Trading preferences
+    (alert settings, monitoring subscriptions, watchlists) all live in
+    their own tables, never here."""
+
     __tablename__ = "users"
 
     id: Mapped[uuid.UUID] = _uuid_pk()
-    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
+    email: Mapped[str] = mapped_column(String(255), unique=True, nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(String(255), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    role: Mapped[str] = mapped_column(String(32), default="user")
+    plan: Mapped[str] = mapped_column(String(32), default="free")
+    timezone: Mapped[str] = mapped_column(String(64), default="America/New_York")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
 
     watchlists: Mapped[list["Watchlist"]] = relationship(back_populates="user")
 

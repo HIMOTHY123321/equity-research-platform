@@ -1,0 +1,76 @@
+# Phase 16 (§79): a production-topology-shaped LOCAL smoke test --
+# Postgres + api ("api" worker_mode, no background monitors) + a
+# dedicated worker (exactly one) + web, wired together the same way a
+# real deployment would be. Not for production use as-is (no secrets
+# management, no TLS, no managed Postgres backups) -- see
+# docs/deployment.md for what a real deployment adds on top of this.
+#
+# Usage:
+#   docker compose up --build
+#   docker compose run --rm api alembic upgrade head   # apply migrations once
+#
+# SECRET_KEY below is a throwaway value for local smoke testing only --
+# never reuse it anywhere real.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ai_market_desk
+      POSTGRES_PASSWORD: local_dev_only_password
+      POSTGRES_DB: ai_market_desk
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_market_desk"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile
+    environment:
+      ENVIRONMENT: staging
+      SECRET_KEY: local-smoke-test-secret-do-not-reuse-32b
+      DATABASE_URL: postgresql+psycopg://ai_market_desk:local_dev_only_password@postgres:5432/ai_market_desk
+      MARKET_DATA_PROVIDER: yfinance
+      NEWS_PROVIDER: fixture
+      WORKER_MODE: api
+      CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    build:
+      context: ./apps/api
+      dockerfile: Dockerfile.worker
+    environment:
+      ENVIRONMENT: staging
+      SECRET_KEY: local-smoke-test-secret-do-not-reuse-32b
+      DATABASE_URL: postgresql+psycopg://ai_market_desk:local_dev_only_password@postgres:5432/ai_market_desk
+      MARKET_DATA_PROVIDER: yfinance
+      NEWS_PROVIDER: fixture
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

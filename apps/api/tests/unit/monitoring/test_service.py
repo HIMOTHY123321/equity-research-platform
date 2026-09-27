@@ -9,7 +9,6 @@ from sqlalchemy.pool import StaticPool
 from app.alerts.repository import SqlAlchemyAlertRepository
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.service import MonitoringService
-from app.watchlist.repository import InMemoryWatchlistRepository
 from tests.unit.setup_detection.conftest import load_real_candles
 
 _RAW_SPY_1H = load_real_candles("SPY_1h")
@@ -51,8 +50,7 @@ def _session_factory():
 
 def _service(symbols: tuple[str, ...]) -> tuple[MonitoringService, "sessionmaker"]:
     session_factory = _session_factory()
-    watchlist = InMemoryWatchlistRepository(initial_symbols=symbols)
-    service = MonitoringService(session_factory, watchlist, FakeProvider())
+    service = MonitoringService(session_factory, FakeProvider(), default_symbols=symbols)
     return service, session_factory
 
 
