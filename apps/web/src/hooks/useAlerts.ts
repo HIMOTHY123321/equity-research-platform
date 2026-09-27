@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useLiveGlobalEvent } from "@/hooks/useLiveSymbol";
 import { acknowledgeAlert, acknowledgeAllAlerts, getUnreadAlertCount, listAlerts } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 import type { AlertEvent } from "@/lib/types";
 
 type LoadState = "loading" | "ready" | "error";
@@ -98,16 +99,23 @@ export function useAlerts(params: { symbol?: string; severity?: string } = {}): 
  * the full alert list. */
 export function useUnreadAlertCount(): number {
   const [count, setCount] = useState(0);
+  // Phase 16.1: /api/alerts/unread-count now requires auth -- never fetch
+  // while signed out (would just 401), and never surface that as an
+  // unhandled rejection.
+  const { state: authState } = useAuth();
 
   useEffect(() => {
+    if (authState !== "signed-in") return;
     let cancelled = false;
-    getUnreadAlertCount().then((res) => {
-      if (!cancelled) setCount(res.count);
-    });
+    getUnreadAlertCount()
+      .then((res) => {
+        if (!cancelled) setCount(res.count);
+      })
+      .catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [authState]);
 
   useLiveGlobalEvent(
     useCallback((frame) => {

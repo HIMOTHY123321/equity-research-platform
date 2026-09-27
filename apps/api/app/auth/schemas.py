@@ -26,6 +26,7 @@ class UserOut(BaseModel):
     email: str
     status: str
     role: str
+    plan: str
     timezone: str
     created_at: datetime
 

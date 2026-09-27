@@ -1,20 +1,26 @@
-# Deployment Guide (Phase 16)
+# Deployment Guide (Phase 16.1)
 
 This document covers what it takes to run AI Market Desk as a real,
 multi-user, production-topology deployment. It reflects the actual state
-of the codebase after Phase 16 -- it does not describe aspirational
+of the codebase after Phase 16.1 -- it does not describe aspirational
 infrastructure that hasn't been built.
 
 ## Readiness levels
 
 - **LOCAL DEVELOPMENT** -- `npm run dev` + `uvicorn --reload`, SQLite,
   yfinance, mock AI provider. Always available, no setup required.
-- **PRODUCTION TECHNICALLY READY** -- what this phase delivers: real auth,
-  server-side authorization, per-user data isolation, Postgres + Alembic
-  migrations, a worker/api process split, authenticated WebSockets,
-  fail-fast config validation, rate limiting, structured logging,
-  standardized errors, health/readiness endpoints, a billing-ready
-  entitlement scaffold, Dockerfiles, docker-compose, and CI.
+- **STAGING READY** -- a real, deployable multi-user application: sign
+  up/sign in through the actual UI, per-user Watchlist/monitoring/alerts,
+  a session cookie that survives revocation/expiration, and an
+  authenticated, per-user-filtered WebSocket. Suitable for a real staging
+  environment with real (non-production) users testing the product.
+- **PRODUCTION TECHNICALLY READY** -- STAGING READY plus Postgres +
+  Alembic migrations, a worker/api process split, fail-fast config
+  validation, rate limiting, structured logging, standardized errors,
+  health/readiness endpoints, a billing-ready entitlement scaffold,
+  Dockerfiles, docker-compose, and CI. Architecturally ready; deployment
+  smoke pending (see "Commercial launch blockers" -- the docker-compose
+  Postgres stack has been reviewed, not executed, in this sandbox).
 - **COMMERCIAL LAUNCH READY** -- NOT claimed by this phase. See
   "Commercial launch blockers" below.
 
@@ -34,10 +40,20 @@ there is no silent fallback.
 
 ## Environment variables
 
-See `apps/api/.env.example` for the full, authoritative list with
-comments. Key groups: app/session (`SECRET_KEY`, `JWT_ALGORITHM`,
-`ACCESS_TOKEN_TTL_MINUTES`), database (`DATABASE_URL`), market/news/AI
-provider selection and credentials, scheduling.
+See `apps/api/.env.example` for the full, authoritative backend list with
+comments, and `apps/web/.env.example` for the frontend. Key groups:
+app/session (`SECRET_KEY`, `JWT_ALGORITHM`, `ACCESS_TOKEN_TTL_MINUTES`),
+database (`DATABASE_URL`), market/news/AI provider selection and
+credentials, scheduling.
+
+**`SESSION_JWT_SECRET` (frontend, Phase 16.1) MUST equal the backend's
+`SECRET_KEY` exactly.** `apps/web/proxy.ts` verifies the session cookie's
+JWT signature locally (fast client-side route gate, no DB round trip)
+using this value; a mismatch means every request looks unauthenticated
+and every product route redirects to `/login` even with a valid session.
+Both default to the same obviously-fake development placeholder so local
+dev needs no extra configuration -- production must override both, to
+the same real secret.
 
 `WORKER_MODE` (`combined` | `api` | `worker`) controls whether this
 process starts the background monitors -- see the next section.
@@ -71,11 +87,12 @@ alembic current
 alembic downgrade -1
 ```
 
-Every Phase 13-16 table (Decision Engine, alerts, monitoring, validation,
-auth) is now covered by `alembic/versions/0009_...py` and
-`0010_user_plan.py` -- `Base.metadata.create_all(checkfirst=True)` at
-runtime is a dev/test convenience only and is a no-op once migrations
-have already created the tables.
+Every Phase 13-16.1 table (Decision Engine, alerts, monitoring,
+validation, auth, sessions, per-user monitoring/delivery/preferences) is
+covered by migrations `0009` through `0011` --
+`Base.metadata.create_all(checkfirst=True)` at runtime is a dev/test
+convenience only and is a no-op once migrations have already created the
+tables.
 
 ## Running locally against Postgres (docker-compose)
 
@@ -87,38 +104,83 @@ docker compose run --rm api alembic upgrade head
 This starts Postgres + `api` (worker_mode=api) + a single `worker` +
 `web`, the same topology a real multi-replica deployment uses. The
 `SECRET_KEY` in `docker-compose.yml` is a throwaway local value -- never
-reuse it.
+reuse it, and remember `apps/web`'s `SESSION_JWT_SECRET` must match it.
 
-**Not yet verified in this repository**: Docker was not available in the
-sandbox this phase was built in, so the compose stack has been reviewed
-for correctness (Dockerfiles, service wiring, migration path) but not
-actually executed end-to-end. Run `docker compose up --build` once in a
-Docker-capable environment before relying on it for a real deployment.
+**PostgreSQL smoke test -- still not executed in this repository.**
+Docker is unavailable in the sandbox this and the prior phase were built
+in (`docker --version` → command not found). The compose stack has been
+reviewed for correctness (Dockerfiles, service wiring, migration path,
+env var propagation) but never run end-to-end. Before relying on it for
+a real deployment, run the following in a Docker-capable environment and
+confirm every step succeeds against a genuinely empty Postgres database:
 
-## Authentication & sessions
+```bash
+docker compose up --build -d
+docker compose run --rm api alembic upgrade head
+curl -f http://localhost:8000/health/ready
+# Sign up two users, verify Watchlist/monitoring/alerts isolation between
+# them (see the User A / User B checklist this phase's final report
+# documents), then:
+docker compose down -v
+```
 
-JWT-based, stateless (`app/auth/`). No server-side revocation list exists
-yet -- "logout" is a client-side token discard. A refresh-token /
-revocation architecture is a disclosed, deferred improvement.
+This remains an explicit deployment blocker, not silently marked done.
 
-## Authorization & multi-tenancy
+## Authentication & sessions (Phase 16.1)
+
+JWT-based (`app/auth/`), transported via an HttpOnly, `SameSite=Lax`
+session cookie (`amd_session`, `app/auth/cookies.py`) -- the frontend
+never reads or stores the token itself. `Authorization: Bearer` is kept
+as a fallback for non-browser callers (tests, scripts); an explicit
+header always wins over the ambient cookie when both are present.
+
+Every issued token carries a `jti` claim naming a row in `user_sessions`
+(`app/auth/sessions.py`) -- `get_current_user` and the WebSocket auth
+check both require that row to still exist, be unexpired, and be
+unrevoked, not just a valid signature. `POST /api/auth/logout` revokes
+exactly the presented session. There is still no refresh-token rotation
+or "revoke all my other sessions" UI -- a real access-token TTL
+(`ACCESS_TOKEN_TTL_MINUTES`, default 24h) is the outer bound; disclosed
+as a reasonable, deferred future improvement rather than a gap in the
+core revocation mechanism itself.
+
+## Authorization & multi-tenancy (Phase 16.1)
 
 - Watchlist is fully per-user (`app.watchlist.repository
   .SqlAlchemyWatchlistRepository`), enforced via `get_current_user` --
   every query is scoped to the authenticated user's id server-side.
-- The global monitoring universe (which symbols the Decision Engine
-  actively scans) and Alert history remain global/shared by design --
-  see `app/monitoring/universe.py`'s own docstring. Per-user alert
-  delivery/acknowledgement scoping is a disclosed, deferred refinement
-  (`AlertAcknowledgementRecord`/`AlertPreferenceRecord` have no
-  `user_id` yet).
+- **Monitoring is fully per-user** (`UserMonitoringSubscriptionRecord`,
+  `/api/monitoring`, auth-required) -- distinct from the SYSTEM RESEARCH
+  UNIVERSE (`app.monitoring.universe.MonitoringUniverse`), which decides
+  which symbols get background computation at all (the union of a fixed
+  default set and every symbol at least one user monitors). See
+  `docs/decisions/0020-multi-user-product-completion.md`.
+- **Alert delivery is fully per-user** (`UserAlertDeliveryRecord`,
+  `/api/alerts`, auth-required) -- a fan-out of the single, shared,
+  never-duplicated `AlertEventRecord` a symbol's transition produces.
+  `/api/alerts/prospective-count` remains deliberately global/
+  unauthenticated: Forward Validation research counts must never inflate
+  because more users started monitoring the same symbol.
+- The SYSTEM RESEARCH UNIVERSE has no automatic pruning step yet -- a
+  symbol added by one user, later un-monitored by everyone, keeps being
+  scanned until removed from the legacy global table. Disclosed, deferred
+  future work, not a correctness gap (it only ever over-scans, never
+  leaks data).
 
-## WebSocket authentication
+## WebSocket authentication (Phase 16.1)
 
-`/api/live/stream` requires `?token=<valid JWT>` on the handshake URL
-(browsers cannot send custom headers on a WebSocket handshake). The
-frame stream itself remains global/shared content today, not yet
-filtered per user -- see the same deferred-refinement note above.
+`/api/live/stream` authenticates off the same HttpOnly session cookie
+every HTTP route uses -- browsers attach cookies to a same-site WebSocket
+handshake automatically, so no token ever appears in the URL, browser
+history, or server access logs. A query-string `?token=` is explicitly
+rejected even if it names a genuinely valid token.
+
+Per-connection frame filtering: `alert_event` frames only reach a
+connection if that user has a delivery for the specific alert;
+`decision_state_change`/`monitor_status` frames only reach a connection
+for symbols that user actively monitors. Every other frame type (quotes,
+candles) is unchanged -- filtered to the connection's own explicit chart
+subscriptions.
 
 ## Rate limiting
 
@@ -132,11 +194,10 @@ that module's docstring for the full rationale.
 `app/billing/` is TEST-MODE ONLY -- no real payment provider is wired.
 `User.plan` defaults to `free`; an admin-only endpoint
 (`POST /api/admin/users/{id}/plan`) can promote a user to `pro` for
-testing. `require_entitlement(feature)` enforces server-side, never
-trusting a client-supplied plan claim. No production route is gated by
-an entitlement yet (the Validation Lab's AI summary is a natural
-candidate, deferred until the frontend has a login UI -- see
-"Commercial launch blockers").
+testing. `require_entitlement(feature)` enforces server-side, always
+re-deriving the plan from the authenticated user's own DB row -- never
+trusting a client-supplied plan claim (proven by test). No production
+route is gated by an entitlement yet.
 
 ## Observability
 
@@ -162,12 +223,15 @@ comment) and remain manual/deferred.
 
 - [ ] Migrations applied (`alembic upgrade head` against the real DB)
 - [ ] `ENVIRONMENT=production` and every fail-fast check passes on boot
-- [ ] `SECRET_KEY` is a real, unique, high-entropy value
+- [ ] `SECRET_KEY` is a real, unique, high-entropy value, and the
+      frontend's `SESSION_JWT_SECRET` matches it exactly
 - [ ] `DATABASE_URL` points at managed Postgres with backups enabled
 - [ ] `MARKET_DATA_PROVIDER`/`NEWS_PROVIDER` point at licensed providers
 - [ ] `CORS_ORIGINS` set to the real frontend origin(s) only
 - [ ] Exactly one `worker_mode=worker` process running; all others `api`
 - [ ] `/health/ready` returns 200 before traffic is routed to a replica
+- [ ] Docker/Postgres smoke test executed end-to-end at least once
+      (see above -- still outstanding as of this phase)
 - [ ] Error tracking (Sentry or equivalent) wired if desired -- no
       abstraction point exists for this yet (disclosed, deferred)
 - [ ] Backups configured on the managed Postgres instance
@@ -185,20 +249,23 @@ or representing this as a licensed product:
 - **Licensed news data** -- same principle for `NEWS_PROVIDER`.
 - **Legal review** -- Terms of Service, Privacy Policy, and the research
   disclaimer are not present in this codebase at all yet (no placeholder
-  pages were built this phase) and need counsel review before launch.
+  pages were built) and need counsel review before launch.
 - **Real billing** -- Stripe (or equivalent) integration, real product/
   price objects, webhook handling for subscription lifecycle, and
   removing the test-mode-only admin plan-change endpoint (or locking it
   down further) before any real customer exists.
-- **Frontend authentication UI** -- no login/signup page exists in
-  `apps/web` yet; the backend auth API is complete and tested, but a user
-  cannot currently sign up through the running application.
-- **Per-user alert/monitoring scoping** -- disclosed above as deferred;
-  acceptable for a single-tenant-feeling research tool today, not for a
-  commercial multi-tenant product where users expect private alert
-  preferences.
 - **Docker/Postgres smoke test** -- reviewed but not executed end-to-end
-  (no Docker available in the environment this phase was built in).
+  (no Docker available in the environment this and the prior phase were
+  built in).
 - **Security review** -- this phase added defensive tests (auth bypass,
-  cross-tenant isolation, error redaction) but has not had an external
-  security review or penetration test.
+  cross-tenant isolation, session revocation, error redaction) but has
+  not had an external security review or penetration test.
+- **Session lifecycle hardening** -- no refresh-token rotation, no
+  "sign out everywhere" UI, no device/session management page. Access
+  tokens are bounded by `ACCESS_TOKEN_TTL_MINUTES` and are individually
+  revocable server-side, which is sufficient for staging/early
+  production use but not yet a full session-management product surface.
+- **SYSTEM RESEARCH UNIVERSE pruning** -- symbols only ever accumulate
+  into the global scan set; there's no "stop scanning a symbol nobody
+  monitors anymore" step yet (cost/scale concern at larger user counts,
+  not a correctness or data-isolation issue).

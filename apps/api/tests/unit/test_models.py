@@ -45,6 +45,10 @@ EXPECTED_TABLES = {
     "alert_horizon_outcomes",
     "signal_gate_versions",
     "signal_gate_results",
+    "user_sessions",
+    "user_monitoring_subscriptions",
+    "user_alert_deliveries",
+    "user_alert_preferences",
 }
 
 

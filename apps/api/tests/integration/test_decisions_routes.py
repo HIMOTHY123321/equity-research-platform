@@ -222,10 +222,23 @@ def test_replay_strengthen_invalidate_fixture_reaches_invalidated(client):
     ]
 
 
+def _signed_in_auth_header(client) -> dict:
+    """Phase 16.1: /api/alerts now requires auth and is user-scoped -- a
+    signed-up, ZFXA-monitoring user is what makes the fixture-replay's
+    alert deliveries actually visible to `GET /api/alerts` below."""
+    token = client.post(
+        "/api/auth/signup", json={"email": "fixture-replay@example.com", "password": "hunter2hunter2"}
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    client.post("/api/monitoring/ZFXA", headers=headers)
+    return headers
+
+
 def test_replay_fixture_emits_alerts_tagged_dev_fixture_origin(client):
+    headers = _signed_in_auth_header(client)
     client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
 
-    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}).json()
+    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}, headers=headers).json()
 
     assert len(alerts) > 0
     assert all(a["origin"] == "dev_fixture" for a in alerts)
@@ -233,6 +246,8 @@ def test_replay_fixture_emits_alerts_tagged_dev_fixture_origin(client):
 
 def test_fixture_replay_route_unreachable_in_production_creates_no_alerts_either(client, monkeypatch):
     from app.config import Settings
+
+    headers = _signed_in_auth_header(client)
 
     monkeypatch.setattr(
         "app.api.routes.decisions.get_settings", lambda: Settings(
@@ -247,7 +262,7 @@ def test_fixture_replay_route_unreachable_in_production_creates_no_alerts_either
 
     client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay")
 
-    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}).json()
+    alerts = client.get("/api/alerts", params={"symbol": "ZFXA"}, headers=headers).json()
     assert alerts == []
 
 

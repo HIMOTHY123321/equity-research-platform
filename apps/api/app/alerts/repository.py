@@ -27,9 +27,13 @@ from app.alerts.models import (
     AlertPreferenceRecord,
     Base,
     MonitoringSubscriptionRecord,
+    UserAlertDeliveryRecord,
+    UserAlertPreferenceRecord,
+    UserMonitoringSubscriptionRecord,
 )
 from app.alerts.prospective import is_prospective_eligible
 from app.alerts.schemas import (
+    DEFAULT_ALERT_PREFERENCES,
     AlertEvent,
     AlertHorizonOutcome,
     AlertOutcome,
@@ -89,6 +93,74 @@ class AlertRepository(ABC):
     @abstractmethod
     def remove_monitoring_subscription(self, symbol: str) -> None: ...
 
+    # ----------------------------------------------------------- Phase 16.1
+    # Per-user monitoring/delivery -- see app.database.models's Phase 16.1
+    # section docstring for the SYSTEM RESEARCH UNIVERSE vs USER MONITORING
+    # SUBSCRIPTIONS distinction these methods implement.
+
+    @abstractmethod
+    def list_user_monitoring_subscriptions(self, user_id) -> list[MonitoringSubscription]: ...
+
+    @abstractmethod
+    def upsert_user_monitoring_subscription(self, user_id, subscription: MonitoringSubscription) -> None: ...
+
+    @abstractmethod
+    def remove_user_monitoring_subscription(self, user_id, symbol: str) -> None: ...
+
+    @abstractmethod
+    def list_all_monitored_symbols(self) -> list[str]:
+        """Distinct symbols with at least one user's ENABLED monitoring
+        subscription, across ALL users -- feeds MonitoringUniverse's SYSTEM
+        RESEARCH UNIVERSE (app.monitoring.universe), never a per-user
+        query."""
+        ...
+
+    @abstractmethod
+    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> int:
+        """Fan-out ONLY -- creates one UserAlertDeliveryRecord per user
+        whose enabled UserMonitoringSubscriptionRecord matches
+        `event.symbol` (respecting that user's own alert-type preference).
+        Must NEVER be mistaken for a second research observation: the
+        single, deterministic `event` row this fans out from already
+        exists and is never duplicated. Returns the number of users
+        delivered to."""
+        ...
+
+    @abstractmethod
+    def list_user_alerts(
+        self,
+        user_id,
+        *,
+        symbol: Optional[str] = None,
+        alert_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        origin: Optional[str] = None,
+        unread_only: bool = False,
+        limit: int = 200,
+    ) -> list[AlertEvent]: ...
+
+    @abstractmethod
+    def user_unread_count(self, user_id, *, symbol: Optional[str] = None) -> int: ...
+
+    @abstractmethod
+    def acknowledge_user_delivery(self, user_id, alert_id: str, *, acknowledged_at: datetime) -> bool:
+        """Returns False if this user has no delivery for `alert_id` at
+        all (never touches another user's row, and never raises -- a
+        missing delivery for THIS user is a 404-worthy condition the route
+        layer decides how to report)."""
+        ...
+
+    @abstractmethod
+    def acknowledge_all_user_deliveries(
+        self, user_id, *, acknowledged_at: datetime, symbol: Optional[str] = None
+    ) -> int: ...
+
+    @abstractmethod
+    def get_user_preferences(self, user_id) -> list[AlertPreference]: ...
+
+    @abstractmethod
+    def set_user_preference(self, user_id, alert_type: AlertType, enabled: bool) -> None: ...
+
     @abstractmethod
     def count_prospective_observations(self, decision_repository) -> int:
         """§33/§34, hardened Phase 14.1 §4: how many AlertEvents are
@@ -143,6 +215,9 @@ class SqlAlchemyAlertRepository(AlertRepository):
                 MonitoringSubscriptionRecord.__table__,
                 AlertOutcomeRecord.__table__,
                 AlertHorizonOutcomeRecord.__table__,
+                UserMonitoringSubscriptionRecord.__table__,
+                UserAlertDeliveryRecord.__table__,
+                UserAlertPreferenceRecord.__table__,
             ],
             checkfirst=True,
         )
@@ -295,6 +370,192 @@ class SqlAlchemyAlertRepository(AlertRepository):
         if existing is not None:
             self._session.delete(existing)
             self._session.commit()
+
+    # ----------------------------------------------------------- Phase 16.1
+
+    def list_user_monitoring_subscriptions(self, user_id) -> list[MonitoringSubscription]:
+        rows = self._session.execute(
+            select(UserMonitoringSubscriptionRecord).where(UserMonitoringSubscriptionRecord.user_id == user_id)
+        ).scalars()
+        return sorted(
+            (
+                MonitoringSubscription(
+                    symbol=r.symbol,
+                    enabled=r.enabled,
+                    preferred_timeframes=r.preferred_timeframes or [],
+                    decision_monitoring_enabled=r.decision_monitoring_enabled,
+                    added_at=r.added_at,
+                )
+                for r in rows
+            ),
+            key=lambda s: s.symbol,
+        )
+
+    def upsert_user_monitoring_subscription(self, user_id, subscription: MonitoringSubscription) -> None:
+        existing = self._session.execute(
+            select(UserMonitoringSubscriptionRecord).where(
+                UserMonitoringSubscriptionRecord.user_id == user_id,
+                UserMonitoringSubscriptionRecord.symbol == subscription.symbol,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.enabled = subscription.enabled
+            existing.decision_monitoring_enabled = subscription.decision_monitoring_enabled
+            existing.preferred_timeframes = subscription.preferred_timeframes
+        else:
+            self._session.add(
+                UserMonitoringSubscriptionRecord(
+                    user_id=user_id,
+                    symbol=subscription.symbol,
+                    enabled=subscription.enabled,
+                    decision_monitoring_enabled=subscription.decision_monitoring_enabled,
+                    preferred_timeframes=subscription.preferred_timeframes,
+                    added_at=subscription.added_at,
+                )
+            )
+        self._session.commit()
+
+    def remove_user_monitoring_subscription(self, user_id, symbol: str) -> None:
+        existing = self._session.execute(
+            select(UserMonitoringSubscriptionRecord).where(
+                UserMonitoringSubscriptionRecord.user_id == user_id,
+                UserMonitoringSubscriptionRecord.symbol == symbol,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            self._session.delete(existing)
+            self._session.commit()
+
+    def list_all_monitored_symbols(self) -> list[str]:
+        rows = self._session.execute(
+            select(UserMonitoringSubscriptionRecord.symbol)
+            .where(UserMonitoringSubscriptionRecord.enabled.is_(True))
+            .distinct()
+        ).scalars()
+        return sorted(set(rows))
+
+    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> int:
+        subscriber_ids = (
+            self._session.execute(
+                select(UserMonitoringSubscriptionRecord.user_id).where(
+                    UserMonitoringSubscriptionRecord.symbol == event.symbol,
+                    UserMonitoringSubscriptionRecord.enabled.is_(True),
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if not subscriber_ids:
+            return 0
+
+        delivered = 0
+        for user_id in subscriber_ids:
+            if not self._user_preference_enabled(user_id, event.alert_type):
+                continue
+            existing = self._session.execute(
+                select(UserAlertDeliveryRecord).where(
+                    UserAlertDeliveryRecord.user_id == user_id,
+                    UserAlertDeliveryRecord.alert_id == event.alert_id,
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                continue
+            self._session.add(
+                UserAlertDeliveryRecord(user_id=user_id, alert_id=event.alert_id, symbol=event.symbol)
+            )
+            delivered += 1
+        if delivered:
+            self._session.commit()
+        return delivered
+
+    def _user_preference_enabled(self, user_id, alert_type: AlertType) -> bool:
+        override = self._session.execute(
+            select(UserAlertPreferenceRecord).where(
+                UserAlertPreferenceRecord.user_id == user_id,
+                UserAlertPreferenceRecord.alert_type == alert_type.value,
+            )
+        ).scalar_one_or_none()
+        if override is not None:
+            return override.enabled
+        return DEFAULT_ALERT_PREFERENCES.get(alert_type, True)
+
+    def list_user_alerts(
+        self,
+        user_id,
+        *,
+        symbol: Optional[str] = None,
+        alert_type: Optional[str] = None,
+        severity: Optional[str] = None,
+        origin: Optional[str] = None,
+        unread_only: bool = False,
+        limit: int = 200,
+    ) -> list[AlertEvent]:
+        query = (
+            select(AlertEventRecord)
+            .join(UserAlertDeliveryRecord, UserAlertDeliveryRecord.alert_id == AlertEventRecord.alert_id)
+            .where(UserAlertDeliveryRecord.user_id == user_id)
+        )
+        if symbol is not None:
+            query = query.where(AlertEventRecord.symbol == symbol)
+        if alert_type is not None:
+            query = query.where(AlertEventRecord.alert_type == alert_type)
+        if severity is not None:
+            query = query.where(AlertEventRecord.severity == severity)
+        if origin is not None:
+            query = query.where(AlertEventRecord.origin == origin)
+        if unread_only:
+            query = query.where(UserAlertDeliveryRecord.acknowledged_at.is_(None))
+        query = query.order_by(AlertEventRecord.occurred_at.desc()).limit(limit)
+        rows = self._session.execute(query).scalars()
+        return [AlertEvent.model_validate(r.payload) for r in rows]
+
+    def user_unread_count(self, user_id, *, symbol: Optional[str] = None) -> int:
+        return len(self.list_user_alerts(user_id, symbol=symbol, unread_only=True, limit=100_000))
+
+    def _get_user_delivery(self, user_id, alert_id: str) -> Optional[UserAlertDeliveryRecord]:
+        return self._session.execute(
+            select(UserAlertDeliveryRecord).where(
+                UserAlertDeliveryRecord.user_id == user_id, UserAlertDeliveryRecord.alert_id == alert_id
+            )
+        ).scalar_one_or_none()
+
+    def acknowledge_user_delivery(self, user_id, alert_id: str, *, acknowledged_at: datetime) -> bool:
+        delivery = self._get_user_delivery(user_id, alert_id)
+        if delivery is None:
+            return False
+        if delivery.acknowledged_at is None:
+            delivery.acknowledged_at = acknowledged_at
+            self._session.commit()
+        return True
+
+    def acknowledge_all_user_deliveries(
+        self, user_id, *, acknowledged_at: datetime, symbol: Optional[str] = None
+    ) -> int:
+        unread = self.list_user_alerts(user_id, symbol=symbol, unread_only=True, limit=100_000)
+        for event in unread:
+            self.acknowledge_user_delivery(user_id, event.alert_id, acknowledged_at=acknowledged_at)
+        return len(unread)
+
+    def get_user_preferences(self, user_id) -> list[AlertPreference]:
+        rows = self._session.execute(
+            select(UserAlertPreferenceRecord).where(UserAlertPreferenceRecord.user_id == user_id)
+        ).scalars()
+        return [AlertPreference(alert_type=AlertType(r.alert_type), enabled=r.enabled) for r in rows]
+
+    def set_user_preference(self, user_id, alert_type: AlertType, enabled: bool) -> None:
+        existing = self._session.execute(
+            select(UserAlertPreferenceRecord).where(
+                UserAlertPreferenceRecord.user_id == user_id,
+                UserAlertPreferenceRecord.alert_type == alert_type.value,
+            )
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.enabled = enabled
+        else:
+            self._session.add(
+                UserAlertPreferenceRecord(user_id=user_id, alert_type=alert_type.value, enabled=enabled)
+            )
+        self._session.commit()
 
     def count_prospective_observations(self, decision_repository) -> int:
         rows = self._session.execute(

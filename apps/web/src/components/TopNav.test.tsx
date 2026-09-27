@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 let currentPath = "/";
@@ -6,14 +6,37 @@ let currentSearch = "";
 vi.mock("next/navigation", () => ({
   usePathname: () => currentPath,
   useSearchParams: () => new URLSearchParams(currentSearch),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
+// Phase 16.1: TopNav now renders account state via useAuth(). Default to
+// signed-in for this suite (most tests care about nav items, not auth UI)
+// -- signed-out/loading are covered by their own dedicated tests below.
+let authState: "loading" | "signed-in" | "signed-out" = "signed-in";
+let authUser: { email: string } | null = { email: "trader@example.com" };
+vi.mock("@/lib/auth-context", () => ({
+  useAuth: () => ({
+    state: authState,
+    user: authUser,
+    login: vi.fn(),
+    signup: vi.fn(),
+    logout: vi.fn().mockResolvedValue(undefined),
+    refresh: vi.fn(),
+  }),
 }));
 
 import { TopNav } from "./TopNav";
 import * as api from "@/lib/api";
 
+function navLinks() {
+  return within(screen.getByRole("navigation")).getAllByRole("link");
+}
+
 describe("TopNav (regression: Forecast Lab disappeared)", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
+    authState = "signed-in";
+    authUser = { email: "trader@example.com" };
     // Phase 14: the unread-alert-count badge fetches on mount -- mocked so
     // this suite never makes a real network call.
     vi.spyOn(api, "getUnreadAlertCount").mockResolvedValue({ count: 0 });
@@ -24,7 +47,7 @@ describe("TopNav (regression: Forecast Lab disappeared)", () => {
     currentSearch = "";
     render(<TopNav />);
 
-    const links = screen.getAllByRole("link").map((el) => el.textContent);
+    const links = navLinks().map((el) => el.textContent);
     expect(links).toEqual([
       "Overview",
       "Research Lab",
@@ -84,5 +107,19 @@ describe("TopNav (regression: Forecast Lab disappeared)", () => {
 
     await waitFor(() => expect(api.getUnreadAlertCount).toHaveBeenCalled());
     expect(screen.getByRole("link", { name: "Alerts" })).toBeInTheDocument();
+  });
+
+  it("shows the signed-in user's email and a Sign out control (Phase 16.1)", () => {
+    render(<TopNav />);
+    expect(screen.getByRole("link", { name: "trader@example.com" })).toHaveAttribute("href", "/settings");
+    expect(screen.getByRole("button", { name: "Sign out" })).toBeInTheDocument();
+  });
+
+  it("shows a Sign in link, and never fetches unread count, when signed out (Phase 16.1)", () => {
+    authState = "signed-out";
+    authUser = null;
+    render(<TopNav />);
+    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+    expect(api.getUnreadAlertCount).not.toHaveBeenCalled();
   });
 });

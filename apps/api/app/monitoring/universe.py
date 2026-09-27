@@ -12,9 +12,20 @@ app.watchlist.repository.SqlAlchemyWatchlistRepository) -- coupling a
 global background service's seed to any one user's personal watchlist
 would either pick an arbitrary user or require this class to run in a
 request context it doesn't have (this seed also runs from the FastAPI
-lifespan, entirely outside any HTTP request/user). A future refinement
-could seed from the union of every user's watchlist instead; deferred and
-disclosed rather than half-implemented under time pressure.
+lifespan, entirely outside any HTTP request/user).
+
+Phase 16.1 (§5): this is now genuinely the SYSTEM RESEARCH UNIVERSE --
+"which symbols need background computation at all" -- and it is
+deliberately NOT the same question as "which alerts does a given user
+receive" (see app.alerts.repository's `deliver_alert_to_subscribed_users`/
+`UserAlertDeliveryRecord` for that). `list_enabled_symbols` is the union
+of the fixed default seed, the legacy global `MonitoringSubscriptionRecord`
+table (kept for any system/admin-pinned symbol), and the distinct set of
+symbols at least one real user has actively subscribed to
+(`UserMonitoringSubscriptionRecord` via
+`AlertRepository.list_all_monitored_symbols`) -- so a symbol a user cares
+about actually gets scanned, without ever conflating "the engine computes
+this" with "this specific user gets alerted for it."
 """
 
 from __future__ import annotations
@@ -34,16 +45,20 @@ class MonitoringUniverse:
         self._default_symbols = default_symbols
 
     def list_enabled_symbols(self) -> list[str]:
-        """The set of symbols the monitor actually scans. Seeds itself from
-        `default_symbols` exactly once, the first time no subscriptions exist
-        at all, so a fresh deployment still monitors something without
-        hard-coding a fixed ticker list; after that, this table alone is the
-        source of truth and Watchlist membership no longer implies
-        monitoring."""
+        """The SYSTEM RESEARCH UNIVERSE the monitor actually scans (Phase
+        16.1 §5): the union of the legacy global subscriptions table
+        (seeded from `default_symbols` exactly once, the first time it's
+        empty, so a fresh deployment still monitors something) and every
+        symbol at least one real user actively monitors. Deliberately NOT
+        "which users get alerted for X" -- that's
+        AlertRepository.deliver_alert_to_subscribed_users, a completely
+        separate, per-user question."""
         subscriptions = self._repository.list_monitoring_subscriptions()
         if not subscriptions:
             subscriptions = self._seed_defaults()
-        return sorted(s.symbol for s in subscriptions if s.enabled and s.decision_monitoring_enabled)
+        system_symbols = {s.symbol for s in subscriptions if s.enabled and s.decision_monitoring_enabled}
+        user_symbols = set(self._repository.list_all_monitored_symbols())
+        return sorted(system_symbols | user_symbols)
 
     def is_monitored(self, symbol: str) -> bool:
         return symbol in self.list_enabled_symbols()

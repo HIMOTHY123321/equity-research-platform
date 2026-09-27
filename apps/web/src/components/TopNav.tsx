@@ -1,10 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
-import { Suspense } from "react";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { Suspense, useState } from "react";
 
 import { useUnreadAlertCount } from "@/hooks/useAlerts";
+import { useAuth } from "@/lib/auth-context";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", symbolAware: true },
@@ -17,6 +18,53 @@ const NAV_ITEMS = [
   { href: "/validation", label: "Validation Lab", symbolAware: false },
   { href: "/glossary", label: "Glossary", symbolAware: false },
 ];
+
+/** Phase 16.1 (§1/§9): account/session state visible in UI -- a signed-in
+ * user sees their email and a Sign out control; a signed-out visitor sees
+ * a Sign in link (the proxy already redirects them to /login before they
+ * can reach a protected page, but /login and /signup themselves render
+ * TopNav-less layouts, so this only ever shows up on product pages). */
+function AccountMenu() {
+  const { user, state, logout } = useAuth();
+  const router = useRouter();
+  const [signingOut, setSigningOut] = useState(false);
+
+  if (state === "loading") return null;
+
+  if (state !== "signed-in" || !user) {
+    return (
+      <Link href="/login" className="text-xs text-muted hover:text-foreground">
+        Sign in
+      </Link>
+    );
+  }
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await logout();
+      router.push("/login");
+    } finally {
+      setSigningOut(false);
+    }
+  }
+
+  return (
+    <div className="flex items-center gap-3 text-xs text-muted">
+      <Link href="/settings" className="hover:text-foreground" title={user.email}>
+        {user.email}
+      </Link>
+      <button
+        type="button"
+        onClick={handleSignOut}
+        disabled={signingOut}
+        className="hover:text-foreground disabled:opacity-60"
+      >
+        Sign out
+      </button>
+    </div>
+  );
+}
 
 function TopNavInner() {
   const pathname = usePathname();
@@ -58,6 +106,7 @@ function TopNavInner() {
             );
           })}
         </nav>
+        <AccountMenu />
       </div>
     </header>
   );

@@ -118,3 +118,111 @@ def test_a_second_users_token_does_not_authenticate_as_the_first_user(client):
     assert me_a["email"] == "a@example.com"
     assert me_b["email"] == "b@example.com"
     assert me_a["id"] != me_b["id"]
+
+
+# --------------------------------------------------------------- Phase 16.1
+# Session lifecycle: cookie transport, logout revocation, disabled-user and
+# expired-session rejection -- see app.auth.sessions/app.auth.cookies.
+
+
+def test_signup_sets_an_httponly_session_cookie(client):
+    response = client.post(
+        "/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    )
+    cookie = next((c for c in response.cookies.jar if c.name == "amd_session"), None)
+    assert cookie is not None
+    # http.cookiejar records boolean-only attributes as a present key with
+    # value None -- "HttpOnly" in the rest dict IS the flag being set.
+    assert "HttpOnly" in cookie._rest
+
+
+def test_cookie_alone_authenticates_me_without_an_authorization_header(client):
+    client.post("/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"})
+    # TestClient persists cookies across requests on the same client by
+    # default -- this call sends NO Authorization header at all.
+    response = client.get("/api/auth/me")
+    assert response.status_code == 200
+    assert response.json()["email"] == "trader@example.com"
+
+
+def test_login_then_authenticated_then_logout_then_session_rejected(client):
+    client.post("/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"})
+    login_response = client.post(
+        "/api/auth/login", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    )
+    token = login_response.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+    logout_response = client.post("/api/auth/logout", headers=headers)
+    assert logout_response.status_code == 204
+
+    # The exact same token, presented again, is now rejected -- proves
+    # revocation is server-verifiable, not merely "the client forgot it."
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_logout_clears_the_session_cookie(client):
+    client.post("/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"})
+    client.post("/api/auth/logout")
+    # Cookie-based session is gone -- a follow-up request with no override
+    # header is unauthenticated.
+    assert client.get("/api/auth/me").status_code == 401
+
+
+def test_logging_out_one_session_does_not_revoke_a_second_login_session(client):
+    client.post("/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"})
+    session_one = client.post(
+        "/api/auth/login", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    ).json()["access_token"]
+    session_two = client.post(
+        "/api/auth/login", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    ).json()["access_token"]
+
+    client.post("/api/auth/logout", headers={"Authorization": f"Bearer {session_one}"})
+
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {session_one}"}).status_code == 401
+    assert client.get("/api/auth/me", headers={"Authorization": f"Bearer {session_two}"}).status_code == 200
+
+
+def test_disabled_user_cannot_continue_using_an_existing_valid_session(client):
+    from app.auth.repository import SqlAlchemyUserRepository
+    from app.database.session import get_db
+
+    token = client.post(
+        "/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    assert client.get("/api/auth/me", headers=headers).status_code == 200
+
+    # Directly disable the user through the same DB the app's own
+    # dependency override points at -- simulates an admin action, no new
+    # session/token issued.
+    db = next(app.dependency_overrides[get_db]())
+    user = SqlAlchemyUserRepository(db).get_by_email("trader@example.com")
+    user.status = "disabled"
+    db.commit()
+    db.close()
+
+    assert client.get("/api/auth/me", headers=headers).status_code == 401
+
+
+def test_expired_session_is_rejected_with_401(client):
+    from datetime import datetime, timedelta, timezone
+
+    from app.auth.security import create_access_token
+    from app.config import get_settings
+
+    signup_response = client.post(
+        "/api/auth/signup", json={"email": "trader@example.com", "password": "hunter2hunter2"}
+    )
+    user_id = signup_response.json()["user"]["id"]
+
+    from uuid import UUID
+
+    issued = create_access_token(
+        UUID(user_id), settings=get_settings(), now=datetime.now(timezone.utc) - timedelta(hours=48)
+    )
+    response = client.get("/api/auth/me", headers={"Authorization": f"Bearer {issued.token}"})
+    assert response.status_code == 401

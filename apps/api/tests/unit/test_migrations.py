@@ -111,3 +111,81 @@ def test_downgrade_cleanly_reverses_the_upgrade():
         assert table_names == {"users"}
         columns = {c["name"] for c in inspector.get_columns("users")}
         assert columns == {"id", "email", "created_at"}
+
+
+# ---------------------------------------------------------------------------
+# Phase 16.1: migration 0011 -- user_sessions, user_monitoring_subscriptions,
+# user_alert_deliveries, user_alert_preferences. Same structural-smoke-test
+# discipline as 0009 above, run against a DB already at the (Phase 16) 0010
+# state (a bare `users` table is enough -- 0011 only adds FKs to it, never
+# alters it).
+# ---------------------------------------------------------------------------
+
+_MIGRATION_0011_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "alembic"
+    / "versions"
+    / "0011_user_sessions_monitoring_alert_delivery.py"
+)
+
+_0011_NEW_TABLES = (
+    "user_sessions",
+    "user_monitoring_subscriptions",
+    "user_alert_deliveries",
+    "user_alert_preferences",
+)
+
+
+def _load_migration_0011():
+    spec = importlib.util.spec_from_file_location("migration_0011", _MIGRATION_0011_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _fresh_engine_with_pre_0011_users_table() -> sa.Engine:
+    engine = sa.create_engine("sqlite:///:memory:")
+    with engine.begin() as conn:
+        conn.execute(
+            sa.text(
+                "CREATE TABLE users (id CHAR(32) PRIMARY KEY, "
+                "email VARCHAR(255) UNIQUE NOT NULL, created_at DATETIME)"
+            )
+        )
+    return engine
+
+
+def test_0011_upgrade_creates_every_new_table_matching_the_current_orm_columns():
+    engine = _fresh_engine_with_pre_0011_users_table()
+    migration = _load_migration_0011()
+
+    with engine.begin() as conn:
+        migration.op = Operations(MigrationContext.configure(conn))
+        migration.upgrade()
+
+    with engine.connect() as conn:
+        inspector = sa.inspect(conn)
+        table_names = set(inspector.get_table_names())
+        assert set(_0011_NEW_TABLES).issubset(table_names)
+
+        for table in _0011_NEW_TABLES:
+            migrated_columns = {c["name"] for c in inspector.get_columns(table)}
+            orm_columns = {c.name for c in Base.metadata.tables[table].columns}
+            assert migrated_columns == orm_columns, f"{table} column mismatch"
+
+
+def test_0011_downgrade_cleanly_reverses_the_upgrade():
+    engine = _fresh_engine_with_pre_0011_users_table()
+    migration = _load_migration_0011()
+
+    with engine.begin() as conn:
+        migration.op = Operations(MigrationContext.configure(conn))
+        migration.upgrade()
+
+    with engine.begin() as conn:
+        migration.op = Operations(MigrationContext.configure(conn))
+        migration.downgrade()
+
+    with engine.connect() as conn:
+        table_names = set(sa.inspect(conn).get_table_names())
+        assert table_names == {"users"}

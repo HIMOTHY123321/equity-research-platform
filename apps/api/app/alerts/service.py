@@ -137,6 +137,12 @@ class AlertService:
             raise ValueError(f"AlertEvent text failed banned-language check: {violations}")
         stored, created = self._repository.record_event(event)
         if created:
+            # Phase 16.1 (§4/§15): fan out to every user who monitors this
+            # symbol -- purely a per-user delivery/read-state row keyed off
+            # this ONE already-persisted, never-duplicated AlertEventRecord.
+            # Must run only on a genuine new row, never on a dedup hit,
+            # same discipline as the event-bus publish above.
+            self._repository.deliver_alert_to_subscribed_users(stored)
             self._event_bus.publish(AlertEmittedEvent(alert=stored))
         return stored
 

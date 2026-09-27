@@ -14,6 +14,9 @@ from app.database.models import (
     AlertPreferenceRecord,
     Base,
     MonitoringSubscriptionRecord,
+    UserAlertDeliveryRecord,
+    UserAlertPreferenceRecord,
+    UserMonitoringSubscriptionRecord,
 )
 
 __all__ = [
@@ -24,4 +27,7 @@ __all__ = [
     "AlertPreferenceRecord",
     "Base",
     "MonitoringSubscriptionRecord",
+    "UserAlertDeliveryRecord",
+    "UserAlertPreferenceRecord",
+    "UserMonitoringSubscriptionRecord",
 ]

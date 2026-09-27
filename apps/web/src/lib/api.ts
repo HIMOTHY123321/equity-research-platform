@@ -70,11 +70,22 @@ export class ApiError extends Error {
   }
 }
 
+/** Phase 16.1 (§2): the session lives ONLY in the HttpOnly `amd_session`
+ * cookie -- this client never reads, stores, or attaches a token itself.
+ * `credentials: "include"` is what makes the browser send that cookie
+ * (and accept a new one via Set-Cookie) on every request, including
+ * cross-port localhost dev (frontend :3000, backend :8000 -- same-site,
+ * cross-origin, which still carries a SameSite=Lax cookie). */
+const AUTH_ROUTES_EXEMPT_FROM_REDIRECT = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/me"]);
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", ...init });
+  const res = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", credentials: "include", ...init });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message = body?.detail ?? `Request failed (${res.status})`;
+    if (res.status === 401 && typeof window !== "undefined" && !AUTH_ROUTES_EXEMPT_FROM_REDIRECT.has(path)) {
+      window.dispatchEvent(new CustomEvent("amd:session-expired"));
+    }
     throw new ApiError(res.status, message);
   }
   if (res.status === 204) return undefined as T;
@@ -87,6 +98,71 @@ export async function checkApiHealth(): Promise<HealthStatus | null> {
   } catch {
     return null;
   }
+}
+
+// ---- Auth (Phase 16.1) -----------------------------------------------------
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  status: string;
+  role: string;
+  plan: string;
+  timezone: string;
+  created_at: string;
+}
+
+export function signup(email: string, password: string): Promise<AuthUser> {
+  return request<{ user: AuthUser }>("/api/auth/signup", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  }).then((res) => res.user);
+}
+
+export function login(email: string, password: string): Promise<AuthUser> {
+  return request<{ user: AuthUser }>("/api/auth/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  }).then((res) => res.user);
+}
+
+export function logout(): Promise<void> {
+  return request<void>("/api/auth/logout", { method: "POST" });
+}
+
+/** Resolves to `null` (never throws) when there is no valid session --
+ * callers use this to determine signed-in state, not just to fetch a
+ * profile. */
+export async function getCurrentUser(): Promise<AuthUser | null> {
+  try {
+    return await request<AuthUser>("/api/auth/me");
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return null;
+    throw err;
+  }
+}
+
+export interface PlanOut {
+  plan: string;
+  entitlements: string[];
+}
+
+export function getMyPlan(): Promise<PlanOut> {
+  return request<PlanOut>("/api/billing/plan");
+}
+
+export interface SystemStatus {
+  environment: string;
+  worker_mode: string;
+  market_data: { provider: string; is_licensed_commercial_feed: boolean; development_only_fallback_in_use: boolean };
+  news: { provider: string; development_only_fallback_in_use: boolean };
+  ai_analysis: { provider: string };
+}
+
+export function getSystemStatus(): Promise<SystemStatus> {
+  return request<SystemStatus>("/api/system/status");
 }
 
 /** `before`, when given (lazy pan-left pagination), requests the `limit`

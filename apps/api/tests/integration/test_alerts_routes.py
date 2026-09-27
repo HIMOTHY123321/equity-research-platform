@@ -1,6 +1,16 @@
 """Integration tests for the Phase 14 Alert Center API surface -- through
 the real FastAPI app, same dependency-override pattern as
-test_decisions_routes.py."""
+test_decisions_routes.py.
+
+Phase 16.1: every route below except `/api/alerts/prospective-count` is
+now auth-required and strictly user-scoped (see
+tests/integration/test_alert_monitoring_isolation.py for the dedicated
+cross-user isolation suite) -- each test here signs up one user and
+subscribes them to the seeded alert's symbol first, so
+`AlertService._record`'s delivery fan-out (`deliver_alert_to_subscribed_
+users`) produces the `UserAlertDeliveryRecord` these routes actually read
+from.
+"""
 
 from __future__ import annotations
 
@@ -39,9 +49,29 @@ def db_env():
     app.dependency_overrides.clear()
 
 
+def _auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
+
+
+def _signup_and_monitor(client: TestClient, *symbols: str, email: str = "trader@example.com") -> str:
+    token = client.post(
+        "/api/auth/signup", json={"email": email, "password": "hunter2hunter2"}
+    ).json()["access_token"]
+    for symbol in symbols:
+        client.post(f"/api/monitoring/{symbol}", headers=_auth(token))
+    return token
+
+
 def _seed_event(session_factory, *, alert_id="alert-1", dedup_key="dedup-1", symbol="SPY", **overrides):
+    """Seeds a global AlertEvent via AlertService (not the raw repository
+    directly) so the Phase 16.1 per-user delivery fan-out actually runs --
+    a bare `repo.record_event()` call would leave every
+    UserAlertDeliveryRecord table empty regardless of who's monitoring."""
+    from app.alerts.service import AlertService
+
     session = session_factory()
-    repo = SqlAlchemyAlertRepository(session)
+    repository = SqlAlchemyAlertRepository(session)
+    service = AlertService(repository)
     fields = dict(
         alert_id=alert_id,
         symbol=symbol,
@@ -57,7 +87,7 @@ def _seed_event(session_factory, *, alert_id="alert-1", dedup_key="dedup-1", sym
         created_at=NOW,
     )
     fields.update(overrides)
-    repo.record_event(AlertEvent(**fields))
+    service._record(AlertEvent(**fields))
     session.close()
 
 
@@ -90,6 +120,7 @@ def test_prospective_count_reflects_eligible_events_only(db_env):
     )
     client = TestClient(app)
 
+    # Deliberately unauthenticated -- this route is global/shared (§15).
     response = client.get("/api/alerts/prospective-count")
 
     assert response.status_code == 200
@@ -99,10 +130,11 @@ def test_prospective_count_reflects_eligible_events_only(db_env):
 
 
 def test_list_alerts_returns_seeded_event(db_env):
-    _seed_event(db_env)
     client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY")
+    _seed_event(db_env)
 
-    response = client.get("/api/alerts")
+    response = client.get("/api/alerts", headers=_auth(token))
 
     assert response.status_code == 200
     alerts = response.json()
@@ -111,33 +143,36 @@ def test_list_alerts_returns_seeded_event(db_env):
 
 
 def test_list_alerts_filters_by_symbol(db_env):
+    client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY", "QQQ")
     _seed_event(db_env, alert_id="a1", dedup_key="k1", symbol="SPY")
     _seed_event(db_env, alert_id="a2", dedup_key="k2", symbol="QQQ")
-    client = TestClient(app)
 
-    response = client.get("/api/alerts", params={"symbol": "QQQ"})
+    response = client.get("/api/alerts", params={"symbol": "QQQ"}, headers=_auth(token))
 
     alerts = response.json()
     assert [a["alert_id"] for a in alerts] == ["a2"]
 
 
 def test_unread_count_reflects_seeded_events(db_env):
+    client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY")
     _seed_event(db_env, alert_id="a1", dedup_key="k1")
     _seed_event(db_env, alert_id="a2", dedup_key="k2")
-    client = TestClient(app)
 
-    response = client.get("/api/alerts/unread-count")
+    response = client.get("/api/alerts/unread-count", headers=_auth(token))
 
     assert response.status_code == 200
     assert response.json() == {"count": 2}
 
 
 def test_acknowledge_reduces_unread_count(db_env):
-    _seed_event(db_env, alert_id="a1", dedup_key="k1")
     client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY")
+    _seed_event(db_env, alert_id="a1", dedup_key="k1")
 
-    ack_response = client.post("/api/alerts/a1/acknowledge")
-    count_response = client.get("/api/alerts/unread-count")
+    ack_response = client.post("/api/alerts/a1/acknowledge", headers=_auth(token))
+    count_response = client.get("/api/alerts/unread-count", headers=_auth(token))
 
     assert ack_response.status_code == 204
     assert count_response.json() == {"count": 0}
@@ -145,28 +180,31 @@ def test_acknowledge_reduces_unread_count(db_env):
 
 def test_acknowledge_unknown_alert_returns_404(db_env):
     client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY")
 
-    response = client.post("/api/alerts/does-not-exist/acknowledge")
+    response = client.post("/api/alerts/does-not-exist/acknowledge", headers=_auth(token))
 
     assert response.status_code == 404
 
 
 def test_acknowledge_all_marks_every_unread(db_env):
-    _seed_event(db_env, alert_id="a1", dedup_key="k1")
-    _seed_event(db_env, alert_id="a2", dedup_key="k2")
     client = TestClient(app)
+    token = _signup_and_monitor(client, "SPY", "QQQ")
+    _seed_event(db_env, alert_id="a1", dedup_key="k1", symbol="SPY")
+    _seed_event(db_env, alert_id="a2", dedup_key="k2", symbol="QQQ")
 
-    response = client.post("/api/alerts/acknowledge-all")
+    response = client.post("/api/alerts/acknowledge-all", headers=_auth(token))
 
     assert response.status_code == 200
     assert response.json() == {"acknowledged": 2}
-    assert client.get("/api/alerts/unread-count").json() == {"count": 0}
+    assert client.get("/api/alerts/unread-count", headers=_auth(token)).json() == {"count": 0}
 
 
 def test_get_preferences_returns_every_alert_type_with_defaults(db_env):
     client = TestClient(app)
+    token = _signup_and_monitor(client)
 
-    response = client.get("/api/alerts/preferences")
+    response = client.get("/api/alerts/preferences", headers=_auth(token))
 
     assert response.status_code == 200
     prefs = {p["alert_type"]: p["enabled"] for p in response.json()}
@@ -177,9 +215,12 @@ def test_get_preferences_returns_every_alert_type_with_defaults(db_env):
 
 def test_set_preference_overrides_default(db_env):
     client = TestClient(app)
+    token = _signup_and_monitor(client)
 
-    put_response = client.put("/api/alerts/preferences/watching", json={"enabled": True})
-    get_response = client.get("/api/alerts/preferences")
+    put_response = client.put(
+        "/api/alerts/preferences/watching", json={"enabled": True}, headers=_auth(token)
+    )
+    get_response = client.get("/api/alerts/preferences", headers=_auth(token))
 
     assert put_response.status_code == 200
     prefs = {p["alert_type"]: p["enabled"] for p in get_response.json()}
@@ -188,7 +229,10 @@ def test_set_preference_overrides_default(db_env):
 
 def test_set_preference_unknown_type_returns_404(db_env):
     client = TestClient(app)
+    token = _signup_and_monitor(client)
 
-    response = client.put("/api/alerts/preferences/not-a-real-type", json={"enabled": True})
+    response = client.put(
+        "/api/alerts/preferences/not-a-real-type", json={"enabled": True}, headers=_auth(token)
+    )
 
     assert response.status_code == 404

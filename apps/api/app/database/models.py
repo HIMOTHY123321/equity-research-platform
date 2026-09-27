@@ -978,3 +978,77 @@ class AlertHorizonOutcomeRecord(Base):
     resolved_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     payload: Mapped[dict] = mapped_column(JSON)
     row_created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+# ---------------------------------------------------------------------------
+# Phase 16.1: real multi-user product completion. `UserSessionRecord` is
+# what makes logout/revocation/expiration server-verifiable (a JWT alone is
+# stateless and would stay valid until its own `exp`); the JWT's `jti` claim
+# names the row here that must still exist, be unexpired, and be unrevoked
+# for the token to be honored (see app.auth.security/dependencies).
+#
+# `UserMonitoringSubscriptionRecord` and `UserAlertDeliveryRecord` are the
+# per-user split of what was, through Phase 16, a single global concept:
+# MonitoringSubscriptionRecord above now means ONLY the SYSTEM RESEARCH
+# UNIVERSE (which symbols get background computation at all -- see
+# app.monitoring.universe); THIS table is "which symbols does THIS user
+# want alerted." AlertEventRecord stays the one deterministic, shared,
+# never-duplicated market event; UserAlertDeliveryRecord is purely a
+# per-user fan-out/read-state row referencing it by alert_id -- research
+# queries (prospective counts, outcome resolution) must never join through
+# this table, or 100 users monitoring the same symbol would look like 100
+# research observations. See docs/decisions/0020.
+# ---------------------------------------------------------------------------
+
+
+class UserSessionRecord(Base):
+    __tablename__ = "user_sessions"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    jti: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class UserMonitoringSubscriptionRecord(Base):
+    __tablename__ = "user_monitoring_subscriptions"
+    __table_args__ = (UniqueConstraint("user_id", "symbol", name="uq_user_monitoring_symbol"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    decision_monitoring_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    preferred_timeframes: Mapped[dict] = mapped_column(JSON, default=list)
+    added_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class UserAlertDeliveryRecord(Base):
+    __tablename__ = "user_alert_deliveries"
+    __table_args__ = (UniqueConstraint("user_id", "alert_id", name="uq_user_alert_delivery"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    alert_id: Mapped[str] = mapped_column(String(64), index=True)
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+
+class UserAlertPreferenceRecord(Base):
+    """Per-user alert-type mute/unmute -- the user-scoped counterpart of the
+    Phase 14 global AlertPreferenceRecord above (kept in the schema for
+    history; no Phase 16.1 route reads or writes it anymore)."""
+
+    __tablename__ = "user_alert_preferences"
+    __table_args__ = (UniqueConstraint("user_id", "alert_type", name="uq_user_alert_preference"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    alert_type: Mapped[str] = mapped_column(String(32), index=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    row_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

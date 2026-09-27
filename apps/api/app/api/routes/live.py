@@ -20,10 +20,15 @@ from typing import Literal, Optional
 
 from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
+from sqlalchemy import select
 
+from app.alerts.repository import SqlAlchemyAlertRepository
 from app.alerts.service import AlertEmittedEvent
+from app.auth.cookies import SESSION_COOKIE_NAME
 from app.auth.repository import SqlAlchemyUserRepository
 from app.auth.security import InvalidTokenError, decode_access_token
+from app.auth.sessions import SqlAlchemyUserSessionRepository
+from app.database.models import User, UserAlertDeliveryRecord, UserMonitoringSubscriptionRecord
 from app.database.session import get_db
 from app.live.config import DEFAULT_LIVE_CONFIG, SubscriptionPriority
 from app.live.forecast_monitor import ForecastResolvedEvent
@@ -38,12 +43,16 @@ router = APIRouter(prefix="/api/live", tags=["live"])
 
 _PRIORITY_BY_NAME = {p.value: p for p in SubscriptionPriority}
 
-# (§19) alert_event/decision_state_change/monitor_status must reach every
-# connection regardless of which symbols it happens to be subscribed to --
-# the Alert Center and Decision Scanner show the whole monitored universe,
-# not just whatever symbol's chart is currently open. Every other typed
-# frame stays filtered to `subscribed_symbols` by `_writer` below.
-_UNIVERSE_WIDE_FRAME_TYPES = frozenset({"alert_event", "decision_state_change", "monitor_status"})
+# Phase 16.1 (§7): alert_event/decision_state_change/monitor_status used to
+# broadcast to every connection regardless of subscription (Phase 16). Now
+# each is filtered per-connection: alert_event only reaches a connection if
+# THIS user actually has a UserAlertDeliveryRecord for that alert_id (i.e.
+# they monitor the symbol it fired for); decision_state_change/
+# monitor_status only reach a connection for symbols THIS user actively
+# monitors (UserMonitoringSubscriptionRecord). Every other typed frame
+# stays filtered to `subscribed_symbols` (the client's own explicit chart
+# subscriptions), unchanged from Phase 12.1.
+_USER_SCOPED_FRAME_TYPES = frozenset({"alert_event", "decision_state_change", "monitor_status"})
 
 
 class SubscribeMessage(BaseModel):
@@ -180,44 +189,89 @@ def live_status(request: Request) -> dict:
     }
 
 
-def _authenticate_websocket_token(websocket: WebSocket, token: Optional[str]) -> bool:
-    """Phase 16 (§32): a validated session is required to open this
-    connection at all -- the browser WebSocket API cannot send an
-    Authorization header, so the token travels as `?token=` on the
-    handshake URL instead (the standard workaround; the token is short-
-    lived and per-connection, never a long-lived secret). The frames this
-    connection receives (quotes, candles, decision states, alerts) remain
-    the same global/shared market and monitoring stream for every
-    authenticated user today (see app.monitoring.universe's own docstring)
-    -- this check establishes WHO may connect, not yet a per-user content
-    filter; per-user AlertAcknowledgement/preference-scoped filtering is a
-    disclosed, deferred refinement (see the Phase 16 final report).
-
-    Resolves its DB session through `app.dependency_overrides` (same
+def _open_session(websocket: WebSocket):
+    """Resolves a DB session through `app.dependency_overrides` (same
     pattern app.main.lifespan already uses for get_session_factory) rather
     than importing SessionLocal directly, so this route respects the same
     test-provided isolated-database override every other DB-touching
     dependency does -- a raw `SessionLocal()` call here would silently hit
-    the real default database in tests instead."""
-    if not token:
-        return False
-    try:
-        user_id = decode_access_token(token)
-    except InvalidTokenError:
-        return False
+    the real default database in tests instead. Caller must always finish
+    the generator (`next(gen, None)`) so the underlying session's own
+    `finally: db.close()` runs."""
     get_db_override = websocket.app.dependency_overrides.get(get_db, get_db)
     session_gen = get_db_override()
     session = next(session_gen)
+    return session, session_gen
+
+
+def _authenticate_websocket_user(websocket: WebSocket, token: Optional[str]) -> Optional[User]:
+    """Phase 16.1 (§2): a validated, still-live (unexpired, unrevoked --
+    see app.auth.sessions) session is required to open this connection at
+    all. The token travels as the same HttpOnly session cookie every HTTP
+    route uses (app.auth.cookies) -- browsers automatically attach cookies
+    to a same-site WebSocket handshake request, so no query-string token
+    is needed and none is ever accepted. `token` is accepted as a plain
+    string purely so this function stays directly unit-testable without a
+    real WebSocket handshake; the only caller below always passes the
+    cookie value, never a query parameter."""
+    if not token:
+        return None
     try:
-        user = SqlAlchemyUserRepository(session).get_by_id(user_id)
-        return user is not None and user.status == "active"
+        payload = decode_access_token(token)
+    except InvalidTokenError:
+        return None
+    session, session_gen = _open_session(websocket)
+    try:
+        if not SqlAlchemyUserSessionRepository(session).is_valid(payload.jti):
+            return None
+        user = SqlAlchemyUserRepository(session).get_by_id(payload.user_id)
+        return user if (user is not None and user.status == "active") else None
     finally:
-        next(session_gen, None)  # let the generator's own finally: db.close() run
+        next(session_gen, None)
+
+
+def _user_monitors_symbol(websocket: WebSocket, user_id, symbol: str) -> bool:
+    session, session_gen = _open_session(websocket)
+    try:
+        # SqlAlchemyAlertRepository's constructor runs the same
+        # `checkfirst=True` create_all every other consumer of these
+        # tables relies on -- a connection whose session never happened to
+        # go through a route that constructs this repository first (e.g.
+        # a quote-only WS connection in a test with no /api/monitoring
+        # call) would otherwise hit "no such table" the first time a
+        # monitor_status/alert_event frame needs filtering.
+        SqlAlchemyAlertRepository(session)
+        row = session.execute(
+            select(UserMonitoringSubscriptionRecord).where(
+                UserMonitoringSubscriptionRecord.user_id == user_id,
+                UserMonitoringSubscriptionRecord.symbol == symbol,
+                UserMonitoringSubscriptionRecord.enabled.is_(True),
+            )
+        ).scalar_one_or_none()
+        return row is not None
+    finally:
+        next(session_gen, None)
+
+
+def _user_has_delivery(websocket: WebSocket, user_id, alert_id: str) -> bool:
+    session, session_gen = _open_session(websocket)
+    try:
+        SqlAlchemyAlertRepository(session)
+        row = session.execute(
+            select(UserAlertDeliveryRecord).where(
+                UserAlertDeliveryRecord.user_id == user_id,
+                UserAlertDeliveryRecord.alert_id == alert_id,
+            )
+        ).scalar_one_or_none()
+        return row is not None
+    finally:
+        next(session_gen, None)
 
 
 @router.websocket("/stream")
 async def live_stream(websocket: WebSocket) -> None:
-    if not _authenticate_websocket_token(websocket, websocket.query_params.get("token")):
+    user = _authenticate_websocket_user(websocket, websocket.cookies.get(SESSION_COOKIE_NAME))
+    if user is None:
         await websocket.close(code=4401)
         return
 
@@ -267,20 +321,35 @@ async def live_stream(websocket: WebSocket) -> None:
 
     # Every subscribed-symbol event is broadcast to every connection (the
     # shared-listener design #O); this connection only ever forwards on the
-    # symbols it actually asked for -- except the Phase 14 universe-wide
-    # types (alert_event/decision_state_change/monitor_status), which every
-    # connection receives regardless of subscription (see
-    # _UNIVERSE_WIDE_FRAME_TYPES above).
+    # symbols it actually asked for. The three user-scoped types (Phase
+    # 16.1 §7) are filtered per-connection against THIS user's own
+    # deliveries/monitoring rows instead, never against subscribed_symbols
+    # -- a symbol can be user-monitored (and so alert-worthy) without the
+    # user ever having opened its chart.
     async def _writer() -> None:
         while True:
             frame = await outbound.get()
-            symbol = frame.get("symbol")
-            if (
-                symbol is not None
-                and symbol not in subscribed_symbols
-                and frame.get("type") not in _UNIVERSE_WIDE_FRAME_TYPES
-            ):
-                continue
+            frame_type = frame.get("type")
+            if frame_type == "alert_event":
+                alert_id = (frame.get("alert") or {}).get("alert_id")
+                # Off the event loop thread (asyncio.to_thread): this is a
+                # blocking SQLAlchemy call, and blocking the loop here would
+                # delay quote/heartbeat delivery to EVERY connection, not
+                # just this one, every time any alert fires anywhere.
+                if alert_id is None or not await asyncio.to_thread(
+                    _user_has_delivery, websocket, user.id, alert_id
+                ):
+                    continue
+            elif frame_type in ("decision_state_change", "monitor_status"):
+                symbol = frame.get("symbol")
+                if symbol is not None and not await asyncio.to_thread(
+                    _user_monitors_symbol, websocket, user.id, symbol
+                ):
+                    continue
+            else:
+                symbol = frame.get("symbol")
+                if symbol is not None and symbol not in subscribed_symbols:
+                    continue
             await websocket.send_json(frame)
 
     writer_task = asyncio.create_task(_writer())
