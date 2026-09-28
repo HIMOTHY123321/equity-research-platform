@@ -383,14 +383,24 @@ def test_a_new_connection_gets_the_already_known_quote_even_with_no_new_data(sta
 
 
 def test_two_connections_to_the_same_symbol_share_one_poll_loop(client):
+    # Phase 19 (§1/§2): MonitoringService now reconciles its own
+    # BACKGROUND_BENCHMARK-priority subscriptions across the whole SYSTEM
+    # RESEARCH UNIVERSE at lifespan startup, so `_tasks` is no longer empty
+    # by the time this test's own connections subscribe -- the assertion
+    # below captures the count right after ws1 subscribes and checks it
+    # does NOT grow when ws2 subscribes to the SAME symbol, which is the
+    # actual property this test verifies (one shared poll loop per symbol,
+    # never one per connection), independent of how many OTHER symbols the
+    # background monitor also happens to be polling.
     test_client, _provider = client
     with test_client.websocket_connect(_authed_ws_url(test_client)) as ws1:
         ws1.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
         ws1.receive_json()
+        task_count_after_first_subscriber = len(app.state.live_service._tasks)
         with test_client.websocket_connect(_authed_ws_url(test_client)) as ws2:
             ws2.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
             ws2.receive_json()
-            assert len(app.state.live_service._tasks) == 1
+            assert len(app.state.live_service._tasks) == task_count_after_first_subscriber
 
 
 def test_unrecognized_action_returns_an_error_frame_not_a_crash(client):
@@ -419,12 +429,18 @@ def test_heartbeat_frames_arrive_on_the_configured_interval(client):
 
 
 def test_disconnect_cleans_up_the_subscription(client):
+    # Phase 19 (§1/§2): SPY is in DEFAULT_WATCHLIST_SYMBOLS, so the
+    # background monitor's own BACKGROUND_BENCHMARK subscription would
+    # keep it listed even after this test's own VIEWED-priority
+    # subscription disconnects -- a symbol genuinely outside the default
+    # universe isolates the property this test actually checks (a
+    # connection's own subscription is cleaned up on disconnect).
     test_client, _provider = client
     with test_client.websocket_connect(_authed_ws_url(test_client)) as ws:
-        ws.send_json({"action": "subscribe", "symbol": "SPY", "timeframes": ["1h"]})
+        ws.send_json({"action": "subscribe", "symbol": "COIN", "timeframes": ["1h"]})
         ws.receive_json()
     status = test_client.get("/api/live/status").json()
-    assert "SPY" not in status["connection_status"]["subscribed_symbols"]
+    assert "COIN" not in status["connection_status"]["subscribed_symbols"]
 
 
 # --------------------------------------------------------------- Phase 16.1

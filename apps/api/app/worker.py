@@ -62,7 +62,9 @@ async def run_worker() -> None:
         session_factory, market_provider, news_provider, config=DEFAULT_LIVE_CONFIG
     )
     news_monitor = NewsMonitor(session_factory, news_provider, config=DEFAULT_LIVE_CONFIG)
-    monitoring_service = MonitoringService(session_factory, market_provider, config=DEFAULT_LIVE_CONFIG)
+    monitoring_service = MonitoringService(
+        session_factory, market_provider, config=DEFAULT_LIVE_CONFIG, live_service=live_service
+    )
 
     await recompute_engine.start()
     await forecast_monitor.start()

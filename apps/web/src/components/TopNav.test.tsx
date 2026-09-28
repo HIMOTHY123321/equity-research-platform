@@ -42,7 +42,7 @@ describe("TopNav (regression: Forecast Lab disappeared)", () => {
     vi.spyOn(api, "getUnreadAlertCount").mockResolvedValue({ count: 0 });
   });
 
-  it("renders all nine nav items in order, including Forecast Lab, Scanner, Alerts, and Validation Lab", () => {
+  it("renders all ten nav items in order, including Opportunities, Forecast Lab, Scanner, Alerts, and Validation Lab", () => {
     currentPath = "/";
     currentSearch = "";
     render(<TopNav />);
@@ -50,6 +50,7 @@ describe("TopNav (regression: Forecast Lab disappeared)", () => {
     const links = navLinks().map((el) => el.textContent);
     expect(links).toEqual([
       "Overview",
+      "Opportunities",
       "Research Lab",
       "Forecast Lab",
       "Reports",

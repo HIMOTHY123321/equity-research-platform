@@ -9,6 +9,7 @@ from sqlalchemy.pool import StaticPool
 from app.alerts.repository import SqlAlchemyAlertRepository
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.service import MonitoringService
+from app.monitoring.universe import MonitoringUniverse
 from tests.unit.setup_detection.conftest import load_real_candles
 
 _RAW_SPY_1H = load_real_candles("SPY_1h")
@@ -112,6 +113,77 @@ def test_scan_emits_decision_state_change_events():
     state_changes = [e for e in events if type(e).__name__ == "DecisionStateChangeEvent"]
     assert len(state_changes) == len(transitions)
     assert all(e.symbol == "SPY" for e in state_changes)
+
+
+class _FakeLiveService:
+    """Phase 19 (§1/§2): records subscribe/unsubscribe calls without any
+    real provider/streaming machinery -- MonitoringService only needs
+    something duck-typed as LiveMarketService for this reconciliation."""
+
+    def __init__(self):
+        self.subscribed: list[tuple[str, object]] = []
+        self.unsubscribed: list[tuple[str, object]] = []
+
+    async def subscribe(self, symbol, priority=None):
+        self.subscribed.append((symbol, priority))
+
+    async def unsubscribe(self, symbol, priority=None):
+        self.unsubscribed.append((symbol, priority))
+
+
+async def _run_sync(service: MonitoringService) -> None:
+    await service._sync_live_subscriptions()  # noqa: SLF001 -- testing the private reconciler directly
+
+
+def test_sync_live_subscriptions_is_a_noop_without_a_live_service():
+    import asyncio
+
+    service, _ = _service(("SPY",))
+    asyncio.run(_run_sync(service))  # must not raise
+
+
+def test_sync_live_subscriptions_subscribes_every_universe_symbol_once(monkeypatch):
+    import asyncio
+
+    from app.live.config import SubscriptionPriority
+
+    session_factory = _session_factory()
+    live = _FakeLiveService()
+    service = MonitoringService(
+        session_factory, FakeProvider(), default_symbols=("SPY", "QQQ"), live_service=live
+    )
+
+    asyncio.run(_run_sync(service))
+
+    assert sorted(s for s, _ in live.subscribed) == ["QQQ", "SPY"]
+    assert all(priority == SubscriptionPriority.BACKGROUND_BENCHMARK for _, priority in live.subscribed)
+    assert live.unsubscribed == []
+
+    # A second pass with the SAME universe must not re-subscribe --
+    # ref-counting would otherwise inflate every reconciliation pass.
+    asyncio.run(_run_sync(service))
+    assert sorted(s for s, _ in live.subscribed) == ["QQQ", "SPY"]
+
+
+def test_sync_live_subscriptions_unsubscribes_symbols_removed_from_the_universe():
+    import asyncio
+
+    session_factory = _session_factory()
+    live = _FakeLiveService()
+    service = MonitoringService(
+        session_factory, FakeProvider(), default_symbols=("SPY", "QQQ"), live_service=live
+    )
+    asyncio.run(_run_sync(service))
+
+    universe = MonitoringUniverse(SqlAlchemyAlertRepository(session_factory()))
+    universe.disable("QQQ")
+
+    asyncio.run(_run_sync(service))
+
+    assert [s for s, _ in live.unsubscribed] == ["QQQ"]
+    # SPY was never touched again -- only the genuinely removed symbol is unsubscribed,
+    # and each symbol was subscribed exactly once across both reconciliation passes.
+    assert sorted(s for s, _ in live.subscribed) == ["QQQ", "SPY"]
 
 
 def test_scan_once_broadcasts_alerts_via_shared_event_bus():

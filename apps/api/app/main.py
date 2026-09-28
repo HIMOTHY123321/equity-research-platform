@@ -35,6 +35,7 @@ from app.api.routes import (
     research_catalysts,
     research_intelligence,
     symbols,
+    thesis,
     validation,
     watchlist,
 )
@@ -152,7 +153,9 @@ async def lifespan(app: FastAPI):
     # single user's now-per-user Watchlist -- this background service runs
     # entirely outside any HTTP request/user context, so it can never
     # resolve "whose watchlist" in the first place.
-    monitoring_service = MonitoringService(session_factory, market_provider, config=live_config)
+    monitoring_service = MonitoringService(
+        session_factory, market_provider, config=live_config, live_service=live_service
+    )
 
     app.state.live_service = live_service
     app.state.recompute_engine = recompute_engine
@@ -216,6 +219,7 @@ app.include_router(forecasts.router)
 app.include_router(decisions.router)
 app.include_router(live.router)
 app.include_router(symbols.router)
+app.include_router(thesis.router)
 app.include_router(alerts.router)
 app.include_router(monitoring.router)
 app.include_router(validation.router)

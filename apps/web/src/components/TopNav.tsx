@@ -9,6 +9,7 @@ import { useAuth } from "@/lib/auth-context";
 
 const NAV_ITEMS = [
   { href: "/", label: "Overview", symbolAware: true },
+  { href: "/opportunities", label: "Opportunities", symbolAware: false },
   { href: "/research", label: "Research Lab", symbolAware: true },
   { href: "/forecasts", label: "Forecast Lab", symbolAware: true },
   { href: "/reports", label: "Reports", symbolAware: false },

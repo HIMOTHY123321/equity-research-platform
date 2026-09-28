@@ -2098,3 +2098,131 @@ export interface ValidationSummary {
   text: string;
   schema_version: string;
 }
+
+// Phase 19 (Part 3/Part 12): Stock Thesis + Opportunity Intelligence --
+// every field here mirrors app.thesis.schemas/app.thesis.opportunity_
+// schemas exactly. No score/probability/BUY-SELL field exists on either
+// type; research_lean and category are closed enums, never free text.
+
+export type HistorySufficiencyKind = "full" | "adequate" | "limited" | "very_limited" | "insufficient";
+
+export type ResearchLeanKind =
+  | "bullish_lean"
+  | "bearish_lean"
+  | "mixed"
+  | "insufficient_evidence"
+  | "abstain";
+
+export interface TimeframeTrendSummary {
+  timeframe: Timeframe;
+  trend: TrendClassType;
+  strength: TrendStrengthType | null;
+  explanation: string[];
+  candle_count: number;
+}
+
+export interface KeyLevelSummary {
+  kind: LevelKind;
+  price: number;
+  is_nearest: boolean;
+  source_count: number;
+  timeframe_count: number;
+  timeframes: Timeframe[];
+}
+
+export interface SignalValidationSummary {
+  gate_version: string | null;
+  decision: SignalGateDecisionKind;
+  reasons: string[];
+  evaluated_at: string | null;
+}
+
+export interface StockThesis {
+  symbol: string;
+  timeframe: Timeframe;
+  as_of: string;
+  generated_at: string;
+
+  market_data_provider: string;
+  market_data_cutoff: string | null;
+  current_price: number | null;
+  session: string | null;
+
+  multi_timeframe_trend: TimeframeTrendSummary[];
+  key_levels: KeyLevelSummary[];
+
+  decision_plan: DecisionPlan | null;
+  evidence_diffs: EvidenceDiffSnapshot[];
+
+  active_setups: SetupCandidate[];
+  near_misses: SetupCandidate[];
+
+  evidence_for: string[];
+  evidence_against: string[];
+  contradictions: string[];
+
+  catalyst_context: SetupCatalystContext | null;
+  nearest_catalyst_event: CatalystEvent | null;
+
+  historical_analogs: AnalogQueryResponse | null;
+
+  signal_validation: SignalValidationSummary;
+  ranking_gate_status: string;
+  ranking_validation_message: string;
+
+  history_sufficiency: HistorySufficiencyKind;
+  history_sufficiency_reason: string;
+
+  research_lean: ResearchLeanKind;
+  research_lean_reasons: string[];
+
+  strengthens_if: string[];
+  weakens_if: string[];
+  invalidation: string[];
+
+  fundamentals_status: string;
+
+  data_limitations: string[];
+}
+
+export type AttentionCategoryKind =
+  | "entry_conditions_met"
+  | "active_thesis"
+  | "thesis_strengthening"
+  | "watching"
+  | "near_setup"
+  | "mixed"
+  | "abstain"
+  | "insufficient_data";
+
+export interface OpportunityCandidate {
+  symbol: string;
+  as_of: string;
+  timeframe: Timeframe;
+
+  category: AttentionCategoryKind;
+  decision_state: DecisionStateKind | null;
+  why: string;
+
+  setup_type: string | null;
+  direction: "bullish" | "bearish" | null;
+  structure_trend: TrendClassType | null;
+
+  contradictions_present: boolean;
+  signal_validation_decision: SignalGateDecisionKind;
+  ranking_gate_status: string;
+
+  market_data_provider: string;
+  history_sufficiency: HistorySufficiencyKind | null;
+
+  monitored: boolean;
+
+  decision_plan_id: string | null;
+}
+
+export interface OpportunityListResponse {
+  as_of: string;
+  timeframe: Timeframe;
+  candidates: OpportunityCandidate[];
+  ranking_validation_message: string;
+}

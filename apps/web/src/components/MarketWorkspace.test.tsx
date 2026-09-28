@@ -39,7 +39,7 @@ vi.mock("@/components/DecisionMonitorPanel", () => ({ DecisionMonitorPanel: () =
 vi.mock("@/components/StructurePanel", () => ({ StructurePanel: () => null }));
 vi.mock("@/components/SupportResistancePanel", () => ({ SupportResistancePanel: () => null }));
 vi.mock("@/components/LiveQuoteHeader", () => ({ LiveQuoteHeader: () => null }));
-vi.mock("@/components/RealTimeToggle", () => ({ RealTimeToggle: () => null }));
+vi.mock("@/components/StockThesisPanel", () => ({ StockThesisPanel: () => null }));
 vi.mock("@/components/SymbolCatalystTimeline", () => ({ SymbolCatalystTimeline: () => null }));
 vi.mock("@/components/WhatsMovingPanel", () => ({ WhatsMovingPanel: () => null }));
 vi.mock("@/components/RecentAlertsPanel", () => ({ RecentAlertsPanel: () => null }));

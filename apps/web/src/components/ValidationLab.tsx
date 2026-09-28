@@ -65,8 +65,8 @@ function GateHeader() {
     <section className="rounded-md border border-border bg-surface p-4">
       <div className="flex items-center justify-between">
         <h2 className="flex items-center gap-1.5 font-mono text-sm font-semibold text-foreground">
-          FORWARD VALIDATION GATE
-          <GlossaryHint termId="forward-validation-gate" />
+          SIGNAL VALIDATION GATE
+          <GlossaryHint termId="signal-validation-gate" />
         </h2>
         <span className={`font-mono text-sm font-bold uppercase ${DECISION_STYLE[evaluation.decision]}`}>
           {DECISION_LABEL[evaluation.decision]}
@@ -139,7 +139,7 @@ function AIValidationSummary() {
     <section className="rounded-md border border-border bg-surface p-4">
       <h3 className="flex items-center gap-1.5 font-mono text-xs font-semibold text-foreground">
         AI VALIDATION SUMMARY
-        <GlossaryHint termId="forward-validation-gate" />
+        <GlossaryHint termId="signal-validation-gate" />
       </h3>
       <p className="mt-1 text-[10px] text-muted">
         A plain-language recap of the deterministic figures above -- generated only from already-computed

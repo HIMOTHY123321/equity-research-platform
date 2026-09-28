@@ -7,15 +7,18 @@ import { useSignalGate } from "@/hooks/useValidation";
 import { formatSignalGateDecision, signalGateDecisionColorClass } from "@/lib/format";
 
 /**
- * Phase 18 (§21/§22/§77): a compact terminal widget, never a reproduction
- * of the full Validation Lab. This is the same gate ValidationLab's
- * GateHeader calls the "Forward Validation Gate" -- the term used
- * consistently here rather than inventing a second name for the identical
- * NOT_ENOUGH_DATA/FAIL/MIXED/PASS decision (see the app's glossary entry
- * "forward-validation-gate"). It is deliberately GLOBAL (cross-symbol
- * concentration limits mean it can never validly pass for a single ticker
- * -- see app.validation.gate) -- this widget states that explicitly rather
- * than implying the currently-viewed symbol was itself validated.
+ * Phase 18 (§21/§22/§77); Phase 19 terminology fix: a compact terminal
+ * widget, never a reproduction of the full Validation Lab. This is the
+ * SIGNAL VALIDATION GATE (`app.validation.gate`, Decision/Alert signals)
+ * -- deliberately called that and NOT "Forward Validation Gate", which is
+ * a genuinely separate, independently-versioned gate scoped to Forecast
+ * Lab (`app.forecasting.gate`). Both modules' own docstrings historically
+ * used the same generic phrase, which is exactly the ambiguity this fix
+ * removes at the UI layer (backend gate logic is unchanged). It is
+ * deliberately GLOBAL (cross-symbol concentration limits mean it can
+ * never validly pass for a single ticker -- see app.validation.gate) --
+ * this widget states that explicitly rather than implying the
+ * currently-viewed symbol was itself validated.
  */
 export function ValidationStatusWidget() {
   const gate = useSignalGate("1h");
@@ -29,8 +32,8 @@ export function ValidationStatusWidget() {
     <div className="space-y-1.5 text-[11px]">
       <div className="flex items-center justify-between">
         <span className="flex items-center gap-1 text-muted">
-          Forward Validation Gate
-          <GlossaryHint termId="forward-validation-gate" />
+          Signal Validation Gate
+          <GlossaryHint termId="signal-validation-gate" />
         </span>
         <span className={`font-mono font-semibold uppercase ${signalGateDecisionColorClass(evaluation.decision)}`}>
           {formatSignalGateDecision(evaluation.decision)}

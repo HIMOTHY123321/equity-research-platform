@@ -24,16 +24,10 @@ import type { Timeframe } from "@/lib/types";
 export function LiveQuoteHeader({
   symbol,
   timeframe,
-  realTimeMode = false,
   monitored,
 }: {
   symbol: string;
   timeframe: Timeframe;
-  /** (#2) Only ever rendered as active when the caller has ALSO verified
-   * `streamingActive` -- this component still re-checks it itself below,
-   * since a caller must never be able to force the REAL TIME label onto a
-   * polling provider. */
-  realTimeMode?: boolean;
   /** Phase 18 (§4/§31): whether this symbol is in the user's monitoring
    * universe -- display-only here (the toggle itself lives in Watchlist/
    * Settings); `undefined` (not yet loaded) renders nothing rather than a
@@ -41,8 +35,13 @@ export function LiveQuoteHeader({
   monitored?: boolean;
 }) {
   const { quote, connectionState } = useLiveSymbol(symbol, [timeframe]);
+  // Phase 19 (§9): REAL TIME is automatic backend infrastructure now -- no
+  // caller-supplied mode flag exists anymore. Whether the label is shown
+  // depends solely on the canonical `real_time_available` truth condition
+  // (genuine streaming + confirmed entitlement + active connection),
+  // reflected here via useStreamingActive().
   const streamingActive = useStreamingActive();
-  const showRealTime = realTimeMode && streamingActive;
+  const showRealTime = streamingActive;
   // (#3) Ticks every second from the fixed source timestamp -- never from
   // the backend's own snapshot `age_seconds`, which only changes between
   // poll/WS messages and would otherwise look frozen for long stretches.

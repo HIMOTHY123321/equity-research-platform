@@ -30,6 +30,7 @@ import type {
   MonitoringSubscription,
   NormalizedNewsArticle,
   ObservationStatus,
+  OpportunityListResponse,
   ResearchBrief,
   ResearchQueryResponse,
   ResearchRun,
@@ -43,6 +44,7 @@ import type {
   SignalGateEvaluation,
   SignalGateHistoryEntry,
   SnapshotComparison,
+  StockThesis,
   SupportResistanceSnapshot,
   SymbolMatch,
   SymbolSearchResponse,
@@ -766,4 +768,27 @@ export function getValidationSummary(params: {
   if (params.horizonBars) query.set("horizon_bars", String(params.horizonBars));
   const qs = query.toString();
   return request<ValidationSummary>(`/api/validation/summary${qs ? `?${qs}` : ""}`);
+}
+
+// Phase 19 (Part 3/Part 2): Stock Thesis + Opportunity Intelligence.
+
+export function getStockThesis(symbol: string, timeframe: Timeframe = "1h", asOf?: string): Promise<StockThesis> {
+  const query = new URLSearchParams({ timeframe });
+  if (asOf) query.set("as_of", asOf);
+  return request<StockThesis>(`/api/symbols/${symbol}/thesis?${query.toString()}`);
+}
+
+export function getOpportunities(params: {
+  timeframe?: Timeframe;
+  category?: string;
+  setupType?: string;
+  sort?: "state" | "symbol" | "recency";
+} = {}): Promise<OpportunityListResponse> {
+  const query = new URLSearchParams();
+  if (params.timeframe) query.set("timeframe", params.timeframe);
+  if (params.category) query.set("category", params.category);
+  if (params.setupType) query.set("setup_type", params.setupType);
+  if (params.sort) query.set("sort", params.sort);
+  const qs = query.toString();
+  return request<OpportunityListResponse>(`/api/opportunities${qs ? `?${qs}` : ""}`);
 }

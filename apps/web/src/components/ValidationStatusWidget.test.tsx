@@ -34,7 +34,7 @@ describe("Phase 18 (§21/§22/§77): ValidationStatusWidget", () => {
     render(<ValidationStatusWidget />);
 
     await waitFor(() => expect(screen.getByText("NOT ENOUGH DATA")).toBeInTheDocument());
-    expect(screen.getByText("Forward Validation Gate")).toBeInTheDocument();
+    expect(screen.getByText("Signal Validation Gate")).toBeInTheDocument();
     expect(screen.getByText(/never scoped to a single ticker/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /open validation lab/i })).toHaveAttribute("href", "/validation");
   });

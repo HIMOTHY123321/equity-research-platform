@@ -9,10 +9,10 @@ import { DecisionMonitorPanel } from "@/components/DecisionMonitorPanel";
 import { FeaturePanel } from "@/components/FeaturePanel";
 import { RangeSelector } from "@/components/RangeSelector";
 import { SetupInspectorPanel } from "@/components/SetupInspectorPanel";
+import { StockThesisPanel } from "@/components/StockThesisPanel";
 import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
 import { LiveQuoteHeader } from "@/components/LiveQuoteHeader";
-import { RealTimeToggle } from "@/components/RealTimeToggle";
 import { RecentAlertsPanel } from "@/components/RecentAlertsPanel";
 import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
 import { SymbolSearch } from "@/components/SymbolSearch";
@@ -185,13 +185,16 @@ function MarketWorkspaceInner({
   );
   const [range, setRange] = useState<ChartRange>(DEFAULT_RANGE);
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
-  const [realTimeMode, setRealTimeMode] = useState(false);
+  // Phase 19 (§9): REAL TIME is automatic infrastructure, never a user
+  // mode -- there is no "enable real time" control anymore. Whenever the
+  // backend genuinely confirms `real_time_available` (streaming connection
+  // AND entitlement), the chart auto-follows by default; a manual
+  // pan/zoom still pauses it via useLiveFollow's own wheel/pointerdown
+  // handling (RETURN TO LIVE), which is a display convenience, not a
+  // second activation switch.
   const streamingActive = useStreamingActive();
   const monitoring = useMonitoringSubscriptions();
-  // (#6) Architecture for live-follow: real end-to-end behavior can't be
-  // verified without a genuine Massive entitlement (not active here), so
-  // this is wired defensively and covered by mocked hook tests instead.
-  const liveFollow = useLiveFollow(streamingActive && realTimeMode);
+  const liveFollow = useLiveFollow(streamingActive);
 
   function toggleDisplay(key: keyof ChartDisplayOptions) {
     setDisplay((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -236,7 +239,6 @@ function MarketWorkspaceInner({
               <LiveQuoteHeader
                 symbol={symbol}
                 timeframe={effectiveTimeframe}
-                realTimeMode={realTimeMode}
                 monitored={monitoring.isMonitored(symbol)}
               />
             </div>
@@ -265,11 +267,6 @@ function MarketWorkspaceInner({
                   </button>
                 ))}
               </div>
-              <RealTimeToggle
-                active={realTimeMode}
-                streamingActive={streamingActive}
-                onToggle={() => setRealTimeMode((v) => !v)}
-              />
               <RangeSelector value={range} onChange={setRange} />
               {/* (#5/#6) Always reflects the ACTUAL resolution in use, not
                   necessarily what was last clicked -- clicking still sets
@@ -391,6 +388,8 @@ function MarketWorkspaceInner({
       <section className="rounded-md border border-border bg-surface p-3">
         <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} highlightPlanId={highlightDecisionPlanId} />
       </section>
+
+      <StockThesisPanel symbol={symbol} timeframe={effectiveTimeframe} />
 
       <section className="rounded-md border border-border bg-surface p-3">
         <SetupInspectorPanel query={setupsQuery} />

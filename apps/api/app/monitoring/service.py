@@ -31,8 +31,15 @@ from app.alerts.service import AlertEventBus, AlertService
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
 from app.decision_engine.schemas import DecisionTransition
 from app.decision_engine.service import run_symbol_scan
-from app.live.config import DEFAULT_LIVE_CONFIG, FreshnessState, LiveConfig, classify_freshness
+from app.live.config import (
+    DEFAULT_LIVE_CONFIG,
+    FreshnessState,
+    LiveConfig,
+    SubscriptionPriority,
+    classify_freshness,
+)
 from app.live.market_hours import current_live_session
+from app.live.service import LiveMarketService
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.universe import MonitoringUniverse
 from app.schemas.market_data import Timeframe
@@ -88,6 +95,7 @@ class MonitoringService:
         config: LiveConfig = DEFAULT_LIVE_CONFIG,
         now_fn=lambda: datetime.now(timezone.utc),
         default_symbols: tuple[str, ...] = DEFAULT_WATCHLIST_SYMBOLS,
+        live_service: Optional[LiveMarketService] = None,
     ) -> None:
         self._session_factory = session_factory
         self._market_provider = market_provider
@@ -96,6 +104,16 @@ class MonitoringService:
         self._config = config
         self._now = now_fn
         self._task: Optional[asyncio.Task] = None
+        # Phase 19 (§1/§2): the SYSTEM RESEARCH UNIVERSE already computed
+        # here is the exact "server-side demand" that should drive
+        # streaming subscriptions -- so genuine real-time data is always
+        # flowing for every actively-researched symbol, never gated on a
+        # user happening to have a browser tab open. `None` (default, and
+        # what every existing test constructs) means this reconciliation
+        # is simply skipped -- streaming-optional deployments and the
+        # existing synchronous `scan_once` tests are unaffected.
+        self._live_service = live_service
+        self._live_subscribed: set[str] = set()
         self._listeners: list[
             "asyncio.Queue[DecisionStateChangeEvent | MonitorStatusEvent]"
         ] = []
@@ -266,9 +284,54 @@ class MonitoringService:
         finally:
             session.close()
 
+    # ---------------------------------------------------- live subscription sync
+
+    async def _sync_live_subscriptions(self) -> None:
+        """Phase 19 (§1/§2): reconciles `LiveMarketService`'s
+        `BACKGROUND_BENCHMARK`-priority subscriptions against the current
+        SYSTEM RESEARCH UNIVERSE. Ref-counted at the priority level (see
+        `LiveMarketService.subscribe`/`unsubscribe`), so a symbol also
+        viewed live by an open browser tab (VIEWED priority) is unaffected
+        by this reconciler adding/removing its OWN independent count --
+        and 25 users monitoring NVDA still produces exactly one upstream
+        provider subscription, never 25 (the existing ref-counting this
+        reuses, not new per-symbol duplication). No-ops entirely when no
+        `live_service` was configured (streaming-optional deployments)."""
+        if self._live_service is None:
+            return
+        session = self._session_factory()
+        try:
+            alert_repository = SqlAlchemyAlertRepository(session)
+            universe = MonitoringUniverse(alert_repository, self._default_symbols)
+            current = set(universe.list_enabled_symbols())
+        finally:
+            session.close()
+
+        added = current - self._live_subscribed
+        removed = self._live_subscribed - current
+        for symbol in added:
+            try:
+                await self._live_service.subscribe(symbol, priority=SubscriptionPriority.BACKGROUND_BENCHMARK)
+            except Exception:  # noqa: BLE001 -- one bad symbol must not stop the rest
+                logger.exception("Live subscription sync failed to subscribe %s", symbol)
+                continue
+            self._live_subscribed.add(symbol)
+        for symbol in removed:
+            try:
+                await self._live_service.unsubscribe(
+                    symbol, priority=SubscriptionPriority.BACKGROUND_BENCHMARK
+                )
+            except Exception:  # noqa: BLE001
+                logger.exception("Live subscription sync failed to unsubscribe %s", symbol)
+                continue
+            self._live_subscribed.discard(symbol)
+
     # ------------------------------------------------------------- lifecycle
 
     async def start(self) -> None:
+        # Phase 19: reconcile once immediately so streaming begins at
+        # startup rather than waiting a full scan interval.
+        await self._sync_live_subscriptions()
         self._task = asyncio.create_task(self._run())
 
     async def stop(self) -> None:
@@ -287,6 +350,10 @@ class MonitoringService:
                     await asyncio.to_thread(self.scan_once)
                 except Exception:
                     logger.exception("Monitoring service scan pass failed")
+                try:
+                    await self._sync_live_subscriptions()
+                except Exception:
+                    logger.exception("Live subscription sync pass failed")
                 await asyncio.sleep(self._config.forecast_monitor_interval_seconds)
         except asyncio.CancelledError:
             return
