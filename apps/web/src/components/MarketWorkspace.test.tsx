@@ -42,6 +42,8 @@ vi.mock("@/components/LiveQuoteHeader", () => ({ LiveQuoteHeader: () => null }))
 vi.mock("@/components/RealTimeToggle", () => ({ RealTimeToggle: () => null }));
 vi.mock("@/components/SymbolCatalystTimeline", () => ({ SymbolCatalystTimeline: () => null }));
 vi.mock("@/components/WhatsMovingPanel", () => ({ WhatsMovingPanel: () => null }));
+vi.mock("@/components/RecentAlertsPanel", () => ({ RecentAlertsPanel: () => null }));
+vi.mock("@/components/ValidationStatusWidget", () => ({ ValidationStatusWidget: () => null }));
 
 import { MarketWorkspace } from "./MarketWorkspace";
 import * as api from "@/lib/api";
@@ -153,5 +155,24 @@ describe("MarketWorkspace <-> sidebar Watchlist wiring (regression)", () => {
     // push, never replace -- same back-stack contract as symbol changes,
     // so browser back/forward restores the prior timeframe too.
     expect(options).toEqual({ scroll: false });
+  });
+
+  // Phase 18 (Priority 11, §44): every ancillary panel's query
+  // (features/structure/levels/setups/catalysts/decisions) already
+  // rejects in this file's own beforeEach -- this test makes that an
+  // explicit, named error-isolation guarantee: the chart/header still
+  // render normally regardless. Each panel below is mocked separately in
+  // its own test file (loading/error branches); this proves the workspace
+  // as a whole doesn't crash or blank out when several panels fail at once.
+  it("Phase 18 (Priority 11): chart and header remain usable when every ancillary panel query fails", async () => {
+    currentSearch = "symbol=SPY";
+    render(<MarketWorkspace defaultSymbol="SPY" />);
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "SPY" })).toBeInTheDocument());
+    // Candles themselves resolve successfully in this suite's beforeEach
+    // (empty array) -- the chart area shows the honest "no candles" state
+    // rather than crashing, which is what actually proves every OTHER
+    // panel's rejection didn't take the whole tree down with it.
+    expect(screen.getByText(/no candles returned for spy/i)).toBeInTheDocument();
   });
 });

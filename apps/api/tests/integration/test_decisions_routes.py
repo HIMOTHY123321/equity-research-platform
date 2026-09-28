@@ -136,6 +136,40 @@ def test_get_decision_transitions_returns_full_lifecycle(client):
     assert transitions[0]["to_state"] in ("evaluating",)
 
 
+def test_get_decision_evidence_diffs_returns_the_diff_recorded_after_activation(client):
+    """Phase 18 (§11): a diff is only ever computed once a plan has an
+    activation snapshot to compare against (app.decision_engine.service),
+    so a fresh SPY scan (often WATCHING/ABSTAIN) may have none -- the
+    strengthen_invalidate fixture deterministically drives a plan through
+    ACTIVE_THESIS/STRENGTHENING, which does."""
+    plan = client.post("/api/decisions/_dev/fixtures/strengthen_invalidate/replay").json()
+    plan_id = plan["decision_plan_id"]
+
+    response = client.get(f"/api/decisions/{plan_id}/evidence-diffs")
+
+    assert response.status_code == 200
+    diffs = response.json()
+    assert len(diffs) >= 1
+    assert diffs[0]["decision_plan_id"] == plan_id
+    assert diffs[0]["classification"] in ("strengthening", "weakening", "neutral")
+
+
+def test_get_decision_evidence_diffs_empty_list_for_a_plan_never_activated(client):
+    plans = client.post("/api/decisions/SPY/scan", params={"timeframe": "1h"}).json()
+    plan_id = plans[0]["decision_plan_id"]
+
+    response = client.get(f"/api/decisions/{plan_id}/evidence-diffs")
+
+    assert response.status_code == 200
+    assert isinstance(response.json(), list)
+
+
+def test_get_decision_evidence_diffs_returns_404_for_unknown_plan(client):
+    response = client.get("/api/decisions/does-not-exist/evidence-diffs")
+
+    assert response.status_code == 404
+
+
 def test_get_decision_evidence_never_contains_banned_language(client):
     plans = client.post("/api/decisions/SPY/scan", params={"timeframe": "1h"}).json()
     plan_id = plans[0]["decision_plan_id"]

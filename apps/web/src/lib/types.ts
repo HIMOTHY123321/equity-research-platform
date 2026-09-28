@@ -1758,6 +1758,26 @@ export interface DecisionTransition {
   pipeline_version: string;
 }
 
+// Phase 18 (§11): the deterministic "WHAT CHANGED" record -- computed by
+// app.decision_engine.evidence_diff on every plan evaluation, first
+// exposed to the frontend this phase.
+export type ThesisDirectionClassKind = "strengthening" | "weakening" | "neutral";
+
+export interface FieldChange {
+  field: string;
+  from_value: string | null;
+  to_value: string | null;
+}
+
+export interface EvidenceDiffSnapshot {
+  snapshot_id: string;
+  decision_plan_id: string;
+  as_of: string;
+  changes: FieldChange[];
+  classification: ThesisDirectionClassKind;
+  classification_reasons: string[];
+}
+
 export interface ActivationSnapshot {
   activated_at: string;
   activation_price_reference: number | null;

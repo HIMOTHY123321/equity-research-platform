@@ -437,6 +437,45 @@ export function formatFreshnessLabel(state: string, streamingActive = false): st
   return FRESHNESS_LABELS[state] ?? state.toUpperCase();
 }
 
+const SIGNAL_GATE_DECISION_LABELS: Record<string, string> = {
+  not_enough_data: "NOT ENOUGH DATA",
+  fail: "FAIL",
+  mixed: "MIXED",
+  pass: "PASS",
+};
+
+const SIGNAL_GATE_DECISION_COLORS: Record<string, string> = {
+  not_enough_data: "text-muted",
+  fail: "text-negative",
+  mixed: "text-warning",
+  pass: "text-positive",
+};
+
+/** Phase 18 (§21/§22/§79): the ONE place the Signal Validation Gate's
+ * decision label/color come from -- Validation Lab and any compact
+ * terminal widget must use the exact same terminology, never a
+ * marketing-softened paraphrase of NOT_ENOUGH_DATA/FAIL/MIXED/PASS. */
+export function formatSignalGateDecision(decision: string): string {
+  return SIGNAL_GATE_DECISION_LABELS[decision] ?? decision.toUpperCase();
+}
+
+export function signalGateDecisionColorClass(decision: string): string {
+  return SIGNAL_GATE_DECISION_COLORS[decision] ?? "text-muted";
+}
+
+const LIVE_SESSION_LABELS: Record<string, string> = {
+  pre_market: "PRE-MARKET",
+  regular: "REGULAR",
+  after_hours: "AFTER HOURS",
+  market_closed: "MARKET CLOSED",
+};
+
+/** Phase 18 (§4): the market-header session label -- never guessed from
+ * client clock, always the backend's own session classification. */
+export function formatLiveSession(state: string): string {
+  return LIVE_SESSION_LABELS[state] ?? state.toUpperCase();
+}
+
 export function freshnessColorClass(state: string): string {
   if (state === "live") return "text-positive";
   if (state === "recent") return "text-accent";

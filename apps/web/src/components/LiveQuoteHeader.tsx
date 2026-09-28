@@ -1,7 +1,14 @@
 "use client";
 
 import { GlossaryHint } from "@/components/GlossaryHint";
-import { formatAgeSeconds, formatExchangeTimestamp, formatFreshnessLabel, freshnessColorClass, freshnessDotClass } from "@/lib/format";
+import {
+  formatAgeSeconds,
+  formatExchangeTimestamp,
+  formatFreshnessLabel,
+  formatLiveSession,
+  freshnessColorClass,
+  freshnessDotClass,
+} from "@/lib/format";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
 import { useTickingAgeSeconds } from "@/hooks/useTickingAge";
@@ -18,6 +25,7 @@ export function LiveQuoteHeader({
   symbol,
   timeframe,
   realTimeMode = false,
+  monitored,
 }: {
   symbol: string;
   timeframe: Timeframe;
@@ -26,6 +34,11 @@ export function LiveQuoteHeader({
    * since a caller must never be able to force the REAL TIME label onto a
    * polling provider. */
   realTimeMode?: boolean;
+  /** Phase 18 (§4/§31): whether this symbol is in the user's monitoring
+   * universe -- display-only here (the toggle itself lives in Watchlist/
+   * Settings); `undefined` (not yet loaded) renders nothing rather than a
+   * misleading "OFF". */
+  monitored?: boolean;
 }) {
   const { quote, connectionState } = useLiveSymbol(symbol, [timeframe]);
   const streamingActive = useStreamingActive();
@@ -102,6 +115,25 @@ export function LiveQuoteHeader({
           )}
         </div>
       )}
+      {/* Phase 18 (§4): the always-visible header fields -- bid/ask/spread
+          are always present on every LiveQuote (Phase 12.1 schema), never
+          gated on a streaming provider; "—" only ever appears if `quote`
+          itself is null (handled by the early return above), never here. */}
+      <div className="flex flex-wrap items-center gap-3 text-muted">
+        <span title="Bid / Ask">
+          Bid {quote.bid.toFixed(2)} / Ask {quote.ask.toFixed(2)}
+        </span>
+        <span className="inline-flex items-center gap-1" title="Spread">
+          Spread {quote.spread.toFixed(2)}
+          <GlossaryHint termId="spread" />
+        </span>
+        <span className="inline-flex items-center gap-1">
+          Session: {formatLiveSession(freshness.market_session)}
+        </span>
+        {monitored !== undefined && (
+          <span>Monitoring: {monitored ? "ON" : "OFF"}</span>
+        )}
+      </div>
     </div>
   );
 }

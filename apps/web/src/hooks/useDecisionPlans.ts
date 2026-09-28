@@ -1,7 +1,20 @@
 "use client";
 
-import { getDecisionEvidence, getDecisionExplanations, getDecisionTransitions, scanDecisions } from "@/lib/api";
-import type { DecisionEvidencePacket, DecisionExplanations, DecisionPlan, DecisionTransition, Timeframe } from "@/lib/types";
+import {
+  getDecisionEvidence,
+  getDecisionEvidenceDiffs,
+  getDecisionExplanations,
+  getDecisionTransitions,
+  scanDecisions,
+} from "@/lib/api";
+import type {
+  DecisionEvidencePacket,
+  DecisionExplanations,
+  DecisionPlan,
+  DecisionTransition,
+  EvidenceDiffSnapshot,
+  Timeframe,
+} from "@/lib/types";
 
 import { useAsyncResource, type AsyncResource } from "./useAsyncResource";
 
@@ -39,6 +52,18 @@ export function useDecisionEvidence(decisionPlanId: string | null): AsyncResourc
 export function useDecisionExplanations(decisionPlanId: string | null): AsyncResource<DecisionExplanations> {
   return useAsyncResource(
     () => (decisionPlanId ? getDecisionExplanations(decisionPlanId) : Promise.resolve(null as unknown as DecisionExplanations)),
+    [decisionPlanId],
+  );
+}
+
+/** Phase 18 (§11): oldest-first list of every recorded EvidenceDiffSnapshot
+ * for this plan -- the caller renders the most recent ("WHAT CHANGED SINCE
+ * LAST STATE") and may show earlier ones as history. Empty (never an
+ * error) for a plan that has never had an activation snapshot to diff
+ * against yet (e.g. still WATCHING/ABSTAIN). */
+export function useDecisionEvidenceDiffs(decisionPlanId: string | null): AsyncResource<EvidenceDiffSnapshot[]> {
+  return useAsyncResource(
+    () => (decisionPlanId ? getDecisionEvidenceDiffs(decisionPlanId) : Promise.resolve([])),
     [decisionPlanId],
   );
 }

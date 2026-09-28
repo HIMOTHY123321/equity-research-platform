@@ -35,7 +35,12 @@ from app.decision_engine.ai_brief import (
 from app.decision_engine.fixtures import FIXTURE_SCENARIOS, run_fixture_scenario
 from app.decision_engine.repository import DecisionEngineRepository, SqlAlchemyDecisionEngineRepository
 from app.decision_engine.scanner import ScannerRow, build_scanner_rows
-from app.decision_engine.schemas import TERMINAL_STATES, DecisionPlan, DecisionTransition
+from app.decision_engine.schemas import (
+    TERMINAL_STATES,
+    DecisionPlan,
+    DecisionTransition,
+    EvidenceDiffSnapshot,
+)
 from app.decision_engine.service import run_symbol_scan
 from app.market_data.provider import MarketDataProvider
 from app.monitoring.universe import MonitoringUniverse
@@ -166,6 +171,19 @@ def get_decision_evidence(
 ) -> DecisionEvidencePacket:
     plan = _get_plan_or_404(decision_plan_id, repository)
     return build_decision_evidence_packet(plan)
+
+
+@router.get("/{decision_plan_id}/evidence-diffs", response_model=list[EvidenceDiffSnapshot])
+def get_decision_evidence_diffs(
+    decision_plan_id: str, repository: DecisionEngineRepository = Depends(_decision_repository)
+) -> list[EvidenceDiffSnapshot]:
+    """Phase 18 (§11): the deterministic "WHAT CHANGED" record -- one
+    snapshot per evaluation comparing current evidence against the plan's
+    activation snapshot (app.decision_engine.evidence_diff), oldest first.
+    Computed and persisted by every plan evaluation since Phase 13; this is
+    the first route to expose it."""
+    _get_plan_or_404(decision_plan_id, repository)
+    return repository.list_evidence_diffs(decision_plan_id)
 
 
 @router.get("/{decision_plan_id}/explanations")

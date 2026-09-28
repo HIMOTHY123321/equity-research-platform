@@ -13,6 +13,7 @@ import type {
   DecisionExplanations,
   DecisionPlan,
   DecisionTransition,
+  EvidenceDiffSnapshot,
   EvidencePacket,
   FeatureSnapshot,
   ForecastCategoryKind,
@@ -612,6 +613,11 @@ export function getDecisionEvidence(decisionPlanId: string): Promise<DecisionEvi
 
 export function getDecisionExplanations(decisionPlanId: string): Promise<DecisionExplanations> {
   return request<DecisionExplanations>(`/api/decisions/${decisionPlanId}/explanations`);
+}
+
+/** Phase 18 (§11): the deterministic "WHAT CHANGED" record, oldest first. */
+export function getDecisionEvidenceDiffs(decisionPlanId: string): Promise<EvidenceDiffSnapshot[]> {
+  return request<EvidenceDiffSnapshot[]>(`/api/decisions/${decisionPlanId}/evidence-diffs`);
 }
 
 export function getForecastGate(): Promise<ForwardValidationGateEvaluation> {

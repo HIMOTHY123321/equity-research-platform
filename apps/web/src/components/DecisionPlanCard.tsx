@@ -4,9 +4,57 @@ import { useState } from "react";
 
 import { DecisionStateTimeline } from "@/components/DecisionStateTimeline";
 import { GlossaryHint } from "@/components/GlossaryHint";
-import { useDecisionExplanations } from "@/hooks/useDecisionPlans";
+import { useDecisionEvidenceDiffs, useDecisionExplanations } from "@/hooks/useDecisionPlans";
 import { formatDecisionState, formatDetectionTime, formatSetupType } from "@/lib/format";
 import type { DecisionCondition, DecisionPlan } from "@/lib/types";
+
+const CLASSIFICATION_STYLES: Record<string, string> = {
+  strengthening: "text-positive",
+  weakening: "text-warning",
+  neutral: "text-muted",
+};
+
+/** Phase 18 (§11): "WHAT CHANGED SINCE LAST STATE" -- the deterministic
+ * EvidenceDiff record, never a hand-written summary. Renders only the most
+ * recently recorded snapshot; empty (no error, no placeholder) whenever
+ * the plan has never had an activation snapshot to diff against yet. */
+function WhatChangedBlock({ decisionPlanId }: { decisionPlanId: string }) {
+  const { data, state, error } = useDecisionEvidenceDiffs(decisionPlanId);
+  if (state === "loading") return <p className="text-[11px] text-muted">Loading what changed…</p>;
+  if (state === "error") return <p className="text-[11px] text-negative">{error}</p>;
+  if (!data || data.length === 0) return null;
+
+  const latest = data[data.length - 1];
+  return (
+    <div className="space-y-1 rounded border border-border bg-background p-2">
+      <h5 className="flex items-center gap-1 text-[10px] font-semibold tracking-wide text-muted">
+        WHAT CHANGED SINCE LAST STATE
+        <span className={`uppercase ${CLASSIFICATION_STYLES[latest.classification] ?? "text-muted"}`}>
+          ({latest.classification})
+        </span>
+      </h5>
+      {latest.changes.length === 0 ? (
+        <p className="text-[11px] text-muted">No field changes recorded in this evaluation.</p>
+      ) : (
+        <ul className="space-y-0.5 text-[11px] text-foreground">
+          {latest.changes.map((change, idx) => (
+            <li key={idx}>
+              <span className="text-muted">{change.field}:</span> {change.from_value ?? "—"} →{" "}
+              {change.to_value ?? "—"}
+            </li>
+          ))}
+        </ul>
+      )}
+      {latest.classification_reasons.length > 0 && (
+        <ul className="list-inside list-disc text-[11px] text-muted">
+          {latest.classification_reasons.map((reason, idx) => (
+            <li key={idx}>{reason}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
 
 const STATE_STYLES: Record<string, string> = {
   detected: "bg-muted/15 text-muted",
@@ -144,6 +192,7 @@ export function DecisionPlanCard({
 
       {expanded && (
         <div className="mt-2 space-y-3 border-t border-border pt-2">
+          <WhatChangedBlock decisionPlanId={plan.decision_plan_id} />
           {plan.state === "watching" && missingEntry.length > 0 && (
             <div className="space-y-1">
               <h5 className="text-[10px] font-semibold tracking-wide text-muted">MISSING ENTRY CONDITIONS</h5>

@@ -118,10 +118,87 @@ describe("DecisionMonitorPanel", () => {
       is_terminal: false,
     });
     vi.spyOn(api, "getDecisionTransitions").mockResolvedValue([]);
+    vi.spyOn(api, "getDecisionEvidenceDiffs").mockResolvedValue([]);
 
     render(<DecisionMonitorPanel symbol="SPY" query={useQuery([plan()])} />);
     fireEvent.click(screen.getByText("Breakout + Retest"));
 
     await waitFor(() => expect(screen.getByText(/1h close above 100.00/)).toBeInTheDocument());
+  });
+
+  it("Phase 18 (§11): expanding a plan card shows WHAT CHANGED from the EvidenceDiff record", async () => {
+    vi.spyOn(api, "getDecisionExplanations").mockResolvedValue({
+      why_now: "",
+      why_not_yet: "",
+      what_would_change_state: [],
+      is_terminal: false,
+    });
+    vi.spyOn(api, "getDecisionTransitions").mockResolvedValue([]);
+    vi.spyOn(api, "getDecisionEvidenceDiffs").mockResolvedValue([
+      {
+        snapshot_id: "diff-1",
+        decision_plan_id: "plan-1",
+        as_of: "2026-09-21T14:00:00+00:00",
+        changes: [{ field: "relative_volume", from_value: "1.1", to_value: "1.8" }],
+        classification: "strengthening",
+        classification_reasons: ["Relative volume increased"],
+      },
+    ]);
+
+    render(<DecisionMonitorPanel symbol="SPY" query={useQuery([plan()])} />);
+    fireEvent.click(screen.getByText("Breakout + Retest"));
+
+    await waitFor(() => expect(screen.getByText("WHAT CHANGED SINCE LAST STATE")).toBeInTheDocument());
+    expect(screen.getByText("(strengthening)")).toBeInTheDocument();
+    expect(screen.getByText(/relative_volume:/)).toBeInTheDocument();
+    expect(screen.getByText("Relative volume increased")).toBeInTheDocument();
+  });
+
+  it("Phase 18 (Priority 7, anti-lookahead UI): a resolved plan's card never renders forward/after-the-fact outcome metrics", async () => {
+    // The Terminal's DecisionPlanCard has no wiring to fetch prospective
+    // outcome data at all (MFE/MAE/1-3-5-10-20-bar returns live only in
+    // Validation Lab, a separate page) -- this is a structural guarantee,
+    // asserted here so a future change can't accidentally wire it in
+    // without this test failing.
+    vi.spyOn(api, "getDecisionExplanations").mockResolvedValue({
+      why_now: "Invalidation condition was met.",
+      why_not_yet: "",
+      what_would_change_state: [],
+      is_terminal: true,
+    });
+    vi.spyOn(api, "getDecisionTransitions").mockResolvedValue([]);
+    vi.spyOn(api, "getDecisionEvidenceDiffs").mockResolvedValue([]);
+
+    render(
+      <DecisionMonitorPanel
+        symbol="SPY"
+        query={useQuery([plan({ decision_plan_id: "plan-2", state: "invalidated" })])}
+      />,
+    );
+    fireEvent.click(screen.getByText("Breakout + Retest"));
+
+    await waitFor(() => expect(screen.getByText(/invalidation condition was met/i)).toBeInTheDocument());
+    const text = document.body.textContent?.toLowerCase() ?? "";
+    expect(text).not.toMatch(/\bmfe\b/);
+    expect(text).not.toMatch(/\bmae\b/);
+    expect(text).not.toMatch(/\b(1|3|5|10|20)-bar\b/);
+    expect(text).not.toMatch(/what happened after/);
+  });
+
+  it("Phase 18 (§11): renders nothing extra for WHAT CHANGED when no diff has ever been recorded", async () => {
+    vi.spyOn(api, "getDecisionExplanations").mockResolvedValue({
+      why_now: "",
+      why_not_yet: "",
+      what_would_change_state: [],
+      is_terminal: false,
+    });
+    vi.spyOn(api, "getDecisionTransitions").mockResolvedValue([]);
+    vi.spyOn(api, "getDecisionEvidenceDiffs").mockResolvedValue([]);
+
+    render(<DecisionMonitorPanel symbol="SPY" query={useQuery([plan()])} />);
+    fireEvent.click(screen.getByText("Breakout + Retest"));
+
+    await waitFor(() => expect(screen.getByText(/why now/i)).toBeInTheDocument());
+    expect(screen.queryByText("WHAT CHANGED SINCE LAST STATE")).not.toBeInTheDocument();
   });
 });

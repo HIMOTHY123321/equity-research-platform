@@ -13,9 +13,11 @@ import { StructurePanel } from "@/components/StructurePanel";
 import { SupportResistancePanel } from "@/components/SupportResistancePanel";
 import { LiveQuoteHeader } from "@/components/LiveQuoteHeader";
 import { RealTimeToggle } from "@/components/RealTimeToggle";
+import { RecentAlertsPanel } from "@/components/RecentAlertsPanel";
 import { SymbolCatalystTimeline } from "@/components/SymbolCatalystTimeline";
 import { SymbolSearch } from "@/components/SymbolSearch";
 import { TimeframeSelector } from "@/components/TimeframeSelector";
+import { ValidationStatusWidget } from "@/components/ValidationStatusWidget";
 import { Watchlist } from "@/components/Watchlist";
 import { WhatsMovingPanel } from "@/components/WhatsMovingPanel";
 import {
@@ -30,6 +32,7 @@ import { useCandleHistoryPagination } from "@/hooks/useCandleHistoryPagination";
 import { useDecisionPlans } from "@/hooks/useDecisionPlans";
 import { useLiveFollow } from "@/hooks/useLiveFollow";
 import { useLiveSymbol } from "@/hooks/useLiveSymbol";
+import { useMonitoringSubscriptions } from "@/hooks/useMonitoring";
 import { useStreamingActive } from "@/hooks/useStreamingActive";
 import { DEFAULT_RANGE, limitForRange, resolveRangeCompatibility, type ChartRange } from "@/lib/chartRanges";
 import { TIMEFRAMES, type Timeframe } from "@/lib/types";
@@ -184,6 +187,7 @@ function MarketWorkspaceInner({
   const [display, setDisplay] = useState<ChartDisplayOptions>(DEFAULT_CHART_DISPLAY_OPTIONS);
   const [realTimeMode, setRealTimeMode] = useState(false);
   const streamingActive = useStreamingActive();
+  const monitoring = useMonitoringSubscriptions();
   // (#6) Architecture for live-follow: real end-to-end behavior can't be
   // verified without a genuine Massive entitlement (not active here), so
   // this is wired defensively and covered by mocked hook tests instead.
@@ -229,7 +233,12 @@ function MarketWorkspaceInner({
           <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-2.5">
             <div className="flex items-center gap-3">
               <h2 className="font-mono text-sm font-semibold text-foreground">{symbol}</h2>
-              <LiveQuoteHeader symbol={symbol} timeframe={effectiveTimeframe} realTimeMode={realTimeMode} />
+              <LiveQuoteHeader
+                symbol={symbol}
+                timeframe={effectiveTimeframe}
+                realTimeMode={realTimeMode}
+                monitored={monitoring.isMonitored(symbol)}
+              />
             </div>
             <div className="flex flex-wrap items-center gap-3">
               <div className="flex items-center gap-1.5 text-[10px]">
@@ -371,15 +380,20 @@ function MarketWorkspaceInner({
         </section>
       </div>
 
-      {/* Decision-first ordering: setup intelligence (what matters right now
-          and why) leads, structure/S-R support that read, and raw feature
-          data -- the most "debug terminal" of these panels -- comes last. */}
+      {/* Phase 18 terminal information hierarchy: Decision Monitor (state,
+          WHAT CHANGED, conditions, invalidation -- all inside the plan
+          card) leads, since "what state is this symbol's thesis in right
+          now" is the single highest-priority question; Setup Intelligence
+          (why that state exists / Why Not) follows, then catalyst context,
+          then Recent Alerts/Validation status as compact terminal-scoped
+          summaries; structure/S-R/raw features -- the most "debug
+          terminal" of these panels -- come last. */}
       <section className="rounded-md border border-border bg-surface p-3">
-        <SetupInspectorPanel query={setupsQuery} />
+        <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} highlightPlanId={highlightDecisionPlanId} />
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">
-        <DecisionMonitorPanel symbol={symbol} query={decisionsQuery} highlightPlanId={highlightDecisionPlanId} />
+        <SetupInspectorPanel query={setupsQuery} />
       </section>
 
       <section className="rounded-md border border-border bg-surface p-3">
@@ -398,6 +412,20 @@ function MarketWorkspaceInner({
           setups={setupsQuery.data ? [...setupsQuery.data.qualified_setups, ...setupsQuery.data.candidates] : []}
         />
       </section>
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <section className="rounded-md border border-border bg-surface p-3">
+          <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">
+            RECENT ALERTS — {symbol}
+          </h2>
+          <RecentAlertsPanel symbol={symbol} />
+        </section>
+
+        <section className="rounded-md border border-border bg-surface p-3">
+          <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">VALIDATION STATUS</h2>
+          <ValidationStatusWidget />
+        </section>
+      </div>
 
       <section className="rounded-md border border-border bg-surface p-3">
         <h2 className="mb-2 text-xs font-semibold tracking-wide text-foreground">
