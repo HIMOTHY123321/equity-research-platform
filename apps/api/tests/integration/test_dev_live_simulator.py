@@ -172,6 +172,56 @@ def test_simulator_status_reports_provider_name_as_mock(enabled_client):
     assert status["real_time_available"] is False
 
 
+def test_get_dev_mock_streaming_provider_returns_none_under_genuine_production_settings(monkeypatch):
+    """Phase 19 follow-up: every other test in this file only simulates
+    "disabled" via `app.dependency_overrides` (standing in for
+    settings.enable_dev_live_simulator=False) -- none of them actually
+    call the real `get_dev_mock_streaming_provider()` function against a
+    genuine `environment=production` Settings object. This does exactly
+    that, closing the gap between "the override behaves as if disabled"
+    and "the real function, given real production settings, truly returns
+    None." Verified live via a real `uvicorn app.main:app` process with
+    ENVIRONMENT=production (simulator left at its default) that reaches
+    normal ASGI startup with no ConfigurationError -- production is safe
+    by construction, not merely by a disabled override in tests."""
+    from app.api import deps
+    from app.config import Environment, Settings
+
+    production_settings = Settings(
+        _env_file=None,
+        environment=Environment.PRODUCTION,
+        secret_key="a-real-production-secret-value",
+        database_url="postgresql+psycopg://user:pass@host:5432/proddb",
+        market_data_provider="massive",
+        massive_api_key="a-real-massive-key",
+        news_provider="fixture",
+        cors_origins="https://app.example.com",
+        # enable_dev_live_simulator left at its default (False) -- exactly
+        # what a real production deployment would have, since the config
+        # validator makes True structurally impossible to configure here.
+    )
+    monkeypatch.setattr(deps, "get_settings", lambda: production_settings)
+
+    assert deps.get_dev_mock_streaming_provider() is None
+
+
+def test_mock_provider_can_never_satisfy_real_time_available_even_if_forced_into_production():
+    """Belt-and-suspenders: even in the hypothetical where a mock provider
+    WAS somehow constructed and handed to LiveMarketService in a
+    production-shaped configuration, `real_time_available()` still could
+    not be True -- entitlement is resolved from `provider_name`, and
+    `resolve_streaming_entitlement` only ever grants ENTITLED for the
+    literal string "massive" (see app.live.entitlement); "mock" always
+    resolves NOT_ENTITLED regardless of any other flag."""
+    from app.live.entitlement import resolve_streaming_entitlement
+
+    entitlement = resolve_streaming_entitlement(
+        provider_name="mock", api_key="irrelevant", streaming_entitled_flag=True
+    )
+    assert entitlement.confirmed is False
+    assert entitlement.status.value == "not_entitled"
+
+
 def test_configured_provider_secret_never_appears_in_any_dev_simulator_or_live_status_response(
     enabled_client,
 ):

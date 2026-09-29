@@ -73,6 +73,31 @@ def test_production_rejects_wildcard_cors():
         Settings(_env_file=None, **kwargs)
 
 
+def test_production_rejects_dev_live_simulator_enabled():
+    """Phase 19 follow-up: closes a real gap -- prior to this test, no
+    unit test asserted that ENABLE_DEV_LIVE_SIMULATOR=true is rejected in
+    production; only an integration test that simulated "disabled" via a
+    dependency override existed, which never exercised this validator
+    branch at all. Verified live via a real `uvicorn app.main:app` process
+    with ENVIRONMENT=production + ENABLE_DEV_LIVE_SIMULATOR=true: the
+    process crashes during module import with exactly this error, before
+    ever touching the database or binding a port."""
+    kwargs = _base_production_kwargs()
+    kwargs["enable_dev_live_simulator"] = True
+    with pytest.raises(ConfigurationError, match="ENABLE_DEV_LIVE_SIMULATOR"):
+        Settings(_env_file=None, **kwargs)
+
+
+def test_production_with_safe_configuration_never_enables_the_simulator_by_default():
+    """The flip side: production with every OTHER field safe and the
+    simulator field left at its default (False, never set) must construct
+    cleanly and report the simulator as off -- production is never
+    accidentally blocked from starting by this flag, only by explicitly
+    turning it on."""
+    settings = Settings(_env_file=None, **_base_production_kwargs())
+    assert settings.enable_dev_live_simulator is False
+
+
 def test_production_reports_every_problem_at_once():
     settings_kwargs = dict(
         environment=Environment.PRODUCTION,
