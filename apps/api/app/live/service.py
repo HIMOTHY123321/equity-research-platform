@@ -26,7 +26,7 @@ from app.live.config import (
     classify_freshness,
     resolve_poll_interval,
 )
-from app.live.entitlement import MarketDataEntitlement, resolve_streaming_entitlement
+from app.live.entitlement import EntitlementStatus, MarketDataEntitlement, resolve_streaming_entitlement
 from app.live.events import (
     CompletedCandleEvent,
     ConnectionStatusEvent,
@@ -197,8 +197,46 @@ class LiveMarketService:
         streaming connection is technically active AND the configured
         account has confirmed entitlement. Neither alone is sufficient --
         this is the one function the frontend's REAL TIME indicator must
-        ultimately be driven from (via /api/live/status)."""
-        return self._use_streaming() and self._entitlement.confirmed
+        ultimately be driven from (via /api/live/status).
+
+        Phase 19.1 (§6, live-validation finding): for TRIAL_ONLY
+        entitlement specifically, this is not enough on its own. Unlike
+        ENTITLED (an operator-attested, account-wide fact resolved once
+        at startup), TRIAL_ONLY is discovered purely from a provider's
+        subscribe-status ACCEPTANCE -- a materially weaker signal that
+        says nothing about whether the market is even open or the symbol
+        is currently trading. Live-tested against a real Twelve Data
+        account: a genuinely accepted subscription with zero ticks
+        received (closed market) was returning True here before this
+        fix -- a real false positive. TRIAL_ONLY therefore additionally
+        requires a genuine, recently-received event (_has_fresh_live_
+        data) before REAL TIME may be shown; ENTITLED's stronger,
+        operator-confirmed guarantee is unchanged."""
+        if not self._use_streaming() or not self._entitlement.confirmed:
+            return False
+        if self._entitlement.status == EntitlementStatus.TRIAL_ONLY:
+            return self._has_fresh_live_data()
+        return True
+
+    def _has_fresh_live_data(self) -> bool:
+        """True iff at least one currently-subscribed symbol has a live
+        quote whose SOURCE timestamp is still within the "recent" freshness
+        window, recomputed against the CURRENT clock every call -- never a
+        stale `age_seconds` snapshot from whenever that quote first
+        arrived. A symbol that received exactly one tick hours ago and
+        nothing since correctly stops counting as fresh."""
+        now = self._now()
+        for state in self._symbols.values():
+            quote = state.last_live_quote
+            if quote is None:
+                continue
+            source_ts = quote.freshness.source_timestamp
+            if source_ts is None:
+                continue
+            age_seconds = (now - source_ts).total_seconds()
+            if age_seconds <= self._config.recent_max_age_seconds:
+                return True
+        return False
 
     def latency_summary(self) -> list[LatencySummary]:
         return self._latency.summary()

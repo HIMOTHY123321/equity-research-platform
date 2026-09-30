@@ -18,6 +18,7 @@ from app.live.config import DEFAULT_LIVE_CONFIG
 from app.live.entitlement import EntitlementStatus, MarketDataEntitlement
 from app.live.mock_streaming import MockStreamingProvider
 from app.live.service import LiveMarketService
+from app.live.streaming import StreamTrade
 from app.market_data.provider import MarketDataProvider
 from app.schemas.market_data import PreviousClose
 
@@ -125,7 +126,84 @@ async def test_genuine_subscription_evidence_upgrades_unknown_to_trial_only():
     await service.subscribe("AAPL")
     await _wait_until(lambda: service.entitlement().status == EntitlementStatus.TRIAL_ONLY)
 
+    # Entitlement is confirmed, but no genuine tick has arrived yet.
+    assert service.real_time_available() is False
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_trial_only_becomes_real_time_available_only_after_a_genuine_tick():
+    """Phase 19.1 (§6, live-validation finding): the exact false positive
+    caught by testing against a real Twelve Data account -- an ACCEPTED
+    subscription alone (TRIAL_ONLY) must never flip REAL TIME on by
+    itself. Only once a genuine trade event has actually been ingested
+    does real_time_available() become True."""
+    rest = _StubRestProvider()
+    stream = _EvidenceAwareStream()
+    starting_entitlement = MarketDataEntitlement(
+        provider="twelve_data", status=EntitlementStatus.UNKNOWN, reason="not yet discovered"
+    )
+    service = LiveMarketService(
+        rest,
+        provider_name="twelve_data",
+        now_fn=lambda: _BASE,
+        streaming_provider=stream,
+        entitlement=starting_entitlement,
+        config=_fast_config(),
+    )
+    stream.next_hint = MarketDataEntitlement(
+        provider="twelve_data", status=EntitlementStatus.TRIAL_ONLY, reason="AAPL subscription confirmed"
+    )
+
+    await service.subscribe("AAPL")
+    await _wait_until(lambda: service.entitlement().status == EntitlementStatus.TRIAL_ONLY)
+    assert service.real_time_available() is False
+
+    stream.push_event(
+        StreamTrade(
+            symbol="AAPL", price=123.45, size=0.0, exchange=None, conditions=(), source_timestamp=_BASE
+        )
+    )
+    await _wait_until(lambda: service.latest_quote("AAPL") is not None)
+
     assert service.real_time_available() is True
+    await service.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_trial_only_real_time_available_goes_false_once_the_tick_goes_stale():
+    """A single old tick with nothing since must not keep REAL TIME on
+    forever -- freshness is evaluated against the CURRENT clock, not a
+    snapshot taken when the tick first arrived."""
+    rest = _StubRestProvider()
+    stream = _EvidenceAwareStream()
+    config = _fast_config()
+    clock = {"now": _BASE}
+    service = LiveMarketService(
+        rest,
+        provider_name="twelve_data",
+        now_fn=lambda: clock["now"],
+        streaming_provider=stream,
+        entitlement=MarketDataEntitlement(
+            provider="twelve_data", status=EntitlementStatus.TRIAL_ONLY, reason="AAPL subscription confirmed"
+        ),
+        config=config,
+    )
+    await service.subscribe("AAPL")
+    await _wait_until(lambda: stream.connect_count >= 1)
+
+    stream.push_event(
+        StreamTrade(
+            symbol="AAPL", price=123.45, size=0.0, exchange=None, conditions=(), source_timestamp=_BASE
+        )
+    )
+    await _wait_until(lambda: service.latest_quote("AAPL") is not None)
+    assert service.real_time_available() is True
+
+    from datetime import timedelta
+
+    clock["now"] = _BASE + timedelta(seconds=config.recent_max_age_seconds + 60)
+    assert service.real_time_available() is False
     await service.shutdown()
 
 
