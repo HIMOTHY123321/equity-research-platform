@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional, Union
 
+from app.live.entitlement import MarketDataEntitlement
 from app.market_data.capabilities import ProviderCapabilities
 
 # Channel identifiers -- provider-agnostic; each StreamingMarketDataProvider
@@ -127,3 +128,17 @@ class StreamingMarketDataProvider(ABC):
         subscribed symbol/channel. Raises (e.g. on a dropped connection) to
         signal the supervisor a reconnect+resubscribe cycle is needed --
         never returns silently and never yields a fabricated event."""
+
+    def entitlement_hint(self) -> Optional[MarketDataEntitlement]:
+        """Phase 19.1 (§5/§6): an OPTIONAL, non-abstract escape hatch for
+        providers (like Twelve Data) whose real entitlement can only be
+        discovered at runtime from the wire protocol itself -- e.g. a
+        subscribe-status acknowledgement that names which symbols were
+        actually accepted vs rejected. Returns None by default (no opinion;
+        LiveMarketService's stored entitlement is left untouched), which is
+        exactly what a provider like Massive -- whose entitlement is a
+        static, operator-attested account fact, not something the wire
+        protocol reveals -- should keep doing by simply not overriding
+        this. A non-None return is only ever evidence-based, never a
+        default/optimistic guess."""
+        return None

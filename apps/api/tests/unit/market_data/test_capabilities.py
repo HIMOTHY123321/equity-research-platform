@@ -9,8 +9,9 @@ from __future__ import annotations
 from app.market_data.alpaca_provider import AlpacaMarketDataProvider
 from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
-from app.market_data.capabilities import ALPACA_CAPABILITIES, YFINANCE_CAPABILITIES
+from app.market_data.capabilities import ALPACA_CAPABILITIES, TWELVE_DATA_CAPABILITIES, YFINANCE_CAPABILITIES
 from app.market_data.provider import MarketDataProvider
+from app.market_data.twelve_data_provider import TwelveDataMarketDataProvider
 from app.market_data.yfinance_provider import YFinanceMarketDataProvider
 
 
@@ -49,6 +50,21 @@ def test_alpaca_declares_no_streaming_for_this_rest_only_implementation():
     provider = AlpacaMarketDataProvider()
     assert provider.capabilities() == ALPACA_CAPABILITIES
     provider.close()
+
+
+def test_twelve_data_declares_trade_only_streaming_never_quotes_or_bars():
+    """Phase 19.1: the /v1/quotes/price feed carries price ticks only --
+    streaming_quotes/streaming_bars must stay False so nothing downstream
+    ever expects a bid/ask or pre-aggregated bar from this provider."""
+    provider = TwelveDataMarketDataProvider()
+    try:
+        caps = provider.capabilities()
+        assert caps == TWELVE_DATA_CAPABILITIES
+        assert caps.streaming_trades is True
+        assert caps.streaming_quotes is False
+        assert caps.streaming_bars is False
+    finally:
+        provider.close()
 
 
 def test_cached_provider_passes_through_inner_capabilities():

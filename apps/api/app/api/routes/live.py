@@ -197,6 +197,10 @@ def live_status(request: Request) -> dict:
             "reason": live_service.entitlement().reason,
         },
         "connection_status": live_service.connection_status().model_dump(mode="json"),
+        # Phase 19.1 (§10): provider-reported subscribe evidence (e.g.
+        # Twelve Data's discovered-at-runtime entitled/rejected symbols) --
+        # None when no streaming provider is configured; never a credential.
+        "provider_diagnostics": live_service.streaming_diagnostics(),
         "latency": [
             {
                 "event_type": entry.event_type,

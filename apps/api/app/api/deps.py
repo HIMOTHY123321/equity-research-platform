@@ -23,6 +23,7 @@ from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
 from app.market_data.massive_provider import MassiveMarketDataProvider
 from app.market_data.provider import MarketDataProvider
+from app.market_data.twelve_data_provider import TwelveDataMarketDataProvider
 from app.market_data.yfinance_provider import YFinanceMarketDataProvider
 from app.news.fixture_provider import FixtureNewsProvider
 from app.news.provider import NewsProvider
@@ -61,8 +62,11 @@ def _build_inner_provider() -> MarketDataProvider:
         return YFinanceMarketDataProvider()
     if provider_name == "massive":
         return MassiveMarketDataProvider()
+    if provider_name == "twelve_data":
+        return TwelveDataMarketDataProvider()
     raise ValueError(
-        f"Unknown MARKET_DATA_PROVIDER {provider_name!r}; expected 'yfinance', 'alpaca', or 'massive'"
+        f"Unknown MARKET_DATA_PROVIDER {provider_name!r}; expected 'yfinance', 'alpaca', 'massive', "
+        "or 'twelve_data'"
     )
 
 
@@ -77,17 +81,28 @@ def get_streaming_provider() -> "Optional[StreamingMarketDataProvider]":
     configured/available -- LiveMarketService must keep working via its
     existing per-symbol poll loop in that case, exactly as Phase 12.1 did.
     Never required for tests or app startup; only meaningful when
-    MARKET_DATA_PROVIDER=massive and MASSIVE_API_KEY is set.
+    MARKET_DATA_PROVIDER=massive and MASSIVE_API_KEY is set, or
+    MARKET_DATA_PROVIDER=twelve_data and TWELVE_DATA_API_KEY is set.
 
-    Import of MassiveStreamingProvider is local (not module-level): it pulls
-    in the `websockets` package only when actually needed, so a deployment
-    that never sets MARKET_DATA_PROVIDER=massive never pays for it."""
+    Imports are local (not module-level): each pulls in the `websockets`
+    package only when actually needed, so a deployment that never
+    configures streaming never pays for it."""
     settings = get_settings()
-    if settings.market_data_provider.lower() != "massive" or not settings.massive_api_key:
-        return None
-    from app.market_data.massive_streaming import MassiveStreamingProvider
+    provider_name = settings.market_data_provider.lower()
+    if provider_name == "massive" and settings.massive_api_key:
+        from app.market_data.massive_streaming import MassiveStreamingProvider
 
-    return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
+        return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
+    if provider_name == "twelve_data" and settings.twelve_data_api_key:
+        from app.market_data.twelve_data_streaming import TwelveDataStreamingProvider
+
+        # TWELVE_DATA_WS_BASE_URL is the bare host (e.g.
+        # wss://ws.twelvedata.com); the price-stream path is appended here
+        # so the config value matches Twelve Data's own documented base URL
+        # convention exactly, same as the other provider base-URL settings.
+        ws_url = f"{settings.twelve_data_ws_base_url.rstrip('/')}/v1/quotes/price"
+        return TwelveDataStreamingProvider(settings.twelve_data_api_key, url=ws_url)
+    return None
 
 
 @lru_cache
@@ -108,15 +123,25 @@ def get_dev_mock_streaming_provider() -> "Optional[MockStreamingProvider]":
 
 @lru_cache
 def get_market_data_entitlement() -> "MarketDataEntitlement":
-    """Phase 17 (§1/§27): resolved once per process from operator-set
+    """Phase 17/19.1 (§1/§27): resolved once per process from operator-set
     config only -- never from whether get_streaming_provider() above
     happens to return non-None (a configured key proves nothing about plan
-    tier; see app.live.entitlement)."""
+    tier; see app.live.entitlement). This initial resolution is only a
+    starting point for Twelve Data -- LiveMarketService upgrades/downgrades
+    it dynamically at runtime from TwelveDataStreamingProvider.
+    entitlement_hint() once genuine subscription evidence exists."""
     from app.live.entitlement import resolve_streaming_entitlement
 
     settings = get_settings()
+    provider_name = settings.market_data_provider
+    if provider_name.lower() == "twelve_data":
+        return resolve_streaming_entitlement(
+            provider_name=provider_name,
+            api_key=settings.twelve_data_api_key,
+            streaming_entitled_flag=None,
+        )
     return resolve_streaming_entitlement(
-        provider_name=settings.market_data_provider,
+        provider_name=provider_name,
         api_key=settings.massive_api_key,
         streaming_entitled_flag=settings.massive_streaming_entitled,
     )

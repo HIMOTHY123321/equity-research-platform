@@ -167,6 +167,24 @@ class LiveMarketService:
     def entitlement(self) -> MarketDataEntitlement:
         return self._entitlement
 
+    def _refresh_entitlement_from_provider(self) -> None:
+        """Phase 19.1 (§5/§6): most providers (Massive) have a static,
+        operator-attested entitlement that never changes at runtime --
+        StreamingMarketDataProvider.entitlement_hint() returns None for
+        them by default, and this is a no-op. A provider like Twelve Data,
+        whose real entitlement can only be discovered from genuine wire
+        evidence (subscribe-status acks, price ticks, rate-limit errors),
+        overrides entitlement_hint() to report exactly that -- this method
+        is the only place LiveMarketService ever lets that evidence replace
+        its stored MarketDataEntitlement, and only when the provider
+        actually has a non-None opinion."""
+        if self._streaming_provider is None:
+            return
+        hint = self._streaming_provider.entitlement_hint()
+        if hint is not None and hint != self._entitlement:
+            self._entitlement = hint
+            self._publish(ConnectionStatusEvent(status=self.connection_status()))
+
     def is_streaming(self) -> bool:
         """Technical fact: is a streaming connection actually running.
         Deliberately NOT entitlement-gated -- diagnostic/internal use
@@ -280,6 +298,21 @@ class LiveMarketService:
     def freshness(self, symbol: str) -> Optional[FreshnessInfo]:
         quote = self.latest_quote(symbol)
         return quote.freshness if quote else None
+
+    def streaming_diagnostics(self) -> Optional[dict]:
+        """Phase 19.1 (§10): provider-reported subscription evidence, for
+        /api/live/status diagnostics -- None when no streaming provider is
+        configured at all. `subscribed_symbols`/`rejected_symbols` are read
+        via getattr since only providers that actually discover per-symbol
+        entitlement at runtime (Twelve Data) populate them; a provider
+        without that concept (Massive) simply reports empty lists here,
+        never an error. Never includes any credential."""
+        if self._streaming_provider is None:
+            return None
+        return {
+            "subscribed_symbols": sorted(getattr(self._streaming_provider, "subscribed_symbols", set())),
+            "rejected_symbols": sorted(getattr(self._streaming_provider, "rejected_symbols", set())),
+        }
 
     def connection_status(self) -> ConnectionStatus:
         return ConnectionStatus(
@@ -447,6 +480,7 @@ class LiveMarketService:
                     for symbol, state in list(self._symbols.items()):
                         if state.stream_channels:
                             await self._streaming_provider.subscribe(symbol, state.stream_channels)
+                    self._refresh_entitlement_from_provider()
                     self._reconnect_attempts = 0
                     self._set_connection_state(ConnectionState.CONNECTED)
                     if not first_connect and gap_started_at is not None:
@@ -458,6 +492,7 @@ class LiveMarketService:
                     async for event in self._streaming_provider.events():
                         self._handle_stream_event(event)
                         self._last_message_at = self._now()
+                        self._refresh_entitlement_from_provider()
                 except asyncio.CancelledError:
                     raise
                 except Exception:

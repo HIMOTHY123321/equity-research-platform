@@ -20,7 +20,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Optional
 
-from pydantic import model_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -74,6 +74,16 @@ class Settings(BaseSettings):
     # this exact placeholder (not just emptiness), so a deployer who
     # forgets to override it in production still fails fast instead of
     # accidentally shipping with a publicly-known signing secret.
+    #
+    # Phase 19.1: `SECRET_KEY=` present-but-blank in a local `.env` (the
+    # same "leave unset" shape as MASSIVE_STREAMING_ENTITLED=) previously
+    # meant pydantic-settings loaded `secret_key=""` -- a valid string, so
+    # no validation error at startup, but every JWT signing call then
+    # raised `InvalidKeyError: HMAC key must not be empty` at request time.
+    # Empty resolves to the safe development placeholder below instead;
+    # production's own validator still correctly rejects that exact
+    # placeholder, so this never weakens the production requirement for a
+    # real, explicitly-configured secret.
     secret_key: str = "insecure-development-secret-do-not-use-in-production"
     jwt_algorithm: str = "HS256"
     access_token_ttl_minutes: int = 60 * 24
@@ -91,10 +101,14 @@ class Settings(BaseSettings):
 
     # Market data provider selection: "yfinance" (default -- no account/key
     # needed, research/development only), "alpaca" (requires an eligible
-    # account holder's API credentials below), or "massive" (Phase 12.2 --
-    # requires massive_api_key below; the only provider in this codebase
-    # that genuinely pushes trades/quotes/aggregates over a persistent
-    # WebSocket rather than being polled). Never hard-code a choice
+    # account holder's API credentials below), "massive" (Phase 12.2 --
+    # requires massive_api_key below; genuinely pushes trades/quotes/
+    # aggregates over a persistent WebSocket), or "twelve_data" (Phase 19.1
+    # -- requires twelve_data_api_key below; a free-tier-friendly REST +
+    # trial-WebSocket provider whose actual streaming entitlement is
+    # discovered at runtime from subscription acknowledgements, never
+    # assumed from a configured key -- see app.live.entitlement and
+    # app.market_data.twelve_data_streaming). Never hard-code a choice
     # elsewhere in the codebase -- always branch on this setting.
     market_data_provider: str = "yfinance"
 
@@ -133,6 +147,25 @@ class Settings(BaseSettings):
     # ENTITLED/NOT_ENTITLED.
     massive_streaming_entitled: Optional[bool] = None
 
+    # Twelve Data Market Data (Phase 19.1, only used when
+    # MARKET_DATA_PROVIDER=twelve_data). Unlike Massive, there is
+    # deliberately NO "twelve_data_streaming_entitled" boolean here -- a
+    # free/Basic-plan API key proves nothing about which symbols (if any)
+    # genuinely carry trial WebSocket access, and Twelve Data's own API
+    # exposes no "what tier is this key" call either. Entitlement is
+    # instead discovered honestly at runtime from the WebSocket's own
+    # subscribe-status acknowledgements (see app.live.entitlement and
+    # app.market_data.twelve_data_streaming.TwelveDataStreamingProvider.
+    # entitlement_hint) -- never a blind operator switch. A missing key is
+    # never a startup error: REST calls simply fail with
+    # AuthenticationError, and get_streaming_provider() returns None so
+    # LiveMarketService falls back to REST polling, exactly like Massive.
+    # The key is never sent to the browser; only this backend process ever
+    # holds it, and it is never written to a log line or exception message.
+    twelve_data_api_key: str = ""
+    twelve_data_rest_base_url: str = "https://api.twelvedata.com"
+    twelve_data_ws_base_url: str = "wss://ws.twelvedata.com"
+
     # OpenAI
     openai_api_key: str = ""
     openai_model: str = "gpt-4o-mini"
@@ -157,6 +190,31 @@ class Settings(BaseSettings):
     # default -- and the production validator below makes it structurally
     # impossible to enable in production, not just discouraged.
     enable_dev_live_simulator: bool = False
+
+    @field_validator("secret_key", mode="before")
+    @classmethod
+    def _blank_secret_key_means_unset(cls, value):
+        """See this field's own docstring above -- `SECRET_KEY=` (present,
+        empty) must behave identically to the variable being absent
+        entirely (falls back to the safe development placeholder), never
+        silently loaded as an empty string that only breaks at first JWT
+        signing. Any non-empty string is passed through unchanged."""
+        if isinstance(value, str) and value.strip() == "":
+            return "insecure-development-secret-do-not-use-in-production"
+        return value
+
+    @field_validator("massive_streaming_entitled", mode="before")
+    @classmethod
+    def _blank_massive_streaming_entitled_means_unset(cls, value):
+        """An `.env` line like `MASSIVE_STREAMING_ENTITLED=` (present but
+        empty -- the documented "leave unset" convention this file's own
+        .env.example/docs/deployment.md instructions describe) must mean
+        None/UNKNOWN, not a pydantic bool-parsing crash that prevents the
+        app from starting at all. Any non-empty string is passed through
+        unchanged for pydantic's own bool coercion to handle."""
+        if isinstance(value, str) and value.strip() == "":
+            return None
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
@@ -197,8 +255,9 @@ class Settings(BaseSettings):
             problems.append(
                 "MARKET_DATA_PROVIDER must not be 'yfinance' in production -- yfinance is a "
                 "development/research fallback, never a licensed commercial feed. Configure "
-                "'alpaca' or 'massive' with real credentials, or run with market data "
-                "explicitly in a degraded/unavailable state rather than a silent fallback."
+                "'alpaca', 'massive', or 'twelve_data' with real credentials, or run with "
+                "market data explicitly in a degraded/unavailable state rather than a silent "
+                "fallback."
             )
         if self.news_provider == "yfinance":
             problems.append(

@@ -30,6 +30,18 @@ class EntitlementStatus(str, Enum):
     NOT_ENTITLED = "not_entitled"
     UNKNOWN = "unknown"
     MISCONFIGURED = "misconfigured"
+    # Phase 19.1: Twelve Data's Basic/free plan grants WebSocket access to
+    # only a limited, discovered-at-runtime set of symbols -- genuinely
+    # different from Massive's account-wide "entitled or not" model, so
+    # this needs its own honest label rather than being folded into
+    # ENTITLED (which would overstate it) or NOT_ENTITLED (which would
+    # hide that real, live data IS flowing for the symbols that succeeded).
+    TRIAL_ONLY = "trial_only"
+    # A distinct state from NOT_ENTITLED: the account/key may well be
+    # entitled, but its request budget is currently exhausted -- retrying
+    # immediately would only make it worse. See
+    # app.market_data.twelve_data_streaming for what sets this.
+    RATE_LIMITED = "rate_limited"
 
 
 @dataclass(frozen=True)
@@ -40,7 +52,11 @@ class MarketDataEntitlement:
 
     @property
     def confirmed(self) -> bool:
-        return self.status == EntitlementStatus.ENTITLED
+        # TRIAL_ONLY still means genuine, provider-confirmed real-time data
+        # is flowing for at least one symbol -- REAL TIME may be shown for
+        # that symbol's stream (Phase 19.1 §6); it is RATE_LIMITED/
+        # NOT_ENTITLED/UNKNOWN/MISCONFIGURED that must never satisfy this.
+        return self.status in (EntitlementStatus.ENTITLED, EntitlementStatus.TRIAL_ONLY)
 
 
 def resolve_streaming_entitlement(
@@ -51,6 +67,32 @@ def resolve_streaming_entitlement(
     being merely present (or the socket merely authenticating) is
     deliberately insufficient."""
     normalized_provider = provider_name.lower()
+
+    if normalized_provider == "twelve_data":
+        # Phase 19.1: deliberately never resolves ENTITLED/TRIAL_ONLY here,
+        # even with a key present -- a valid Basic/free key proves nothing
+        # about which symbols (if any) carry real WebSocket access, and
+        # there is no "streaming_entitled_flag" for this provider to check
+        # (see app.config.Settings' docstring for why). This UNKNOWN state
+        # is only ever upgraded at runtime, once genuine subscription
+        # acknowledgements arrive, via LiveMarketService reading
+        # TwelveDataStreamingProvider.entitlement_hint() -- never here.
+        if not api_key:
+            return MarketDataEntitlement(
+                provider=normalized_provider,
+                status=EntitlementStatus.UNKNOWN,
+                reason="TWELVE_DATA_API_KEY is not configured -- no account to check entitlement for.",
+            )
+        return MarketDataEntitlement(
+            provider=normalized_provider,
+            status=EntitlementStatus.UNKNOWN,
+            reason=(
+                "A Twelve Data API key is configured, but real-time streaming entitlement has "
+                "not yet been confirmed -- a valid key does not guarantee WebSocket access on "
+                "the Basic/free plan. This resolves once a genuine subscription attempt "
+                "succeeds or is rejected."
+            ),
+        )
 
     if normalized_provider != "massive":
         return MarketDataEntitlement(

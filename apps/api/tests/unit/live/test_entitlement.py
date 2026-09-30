@@ -75,7 +75,39 @@ def test_reason_is_always_a_nonempty_string():
         assert result.reason
 
 
-def test_only_entitled_status_reports_confirmed_true():
+def test_only_entitled_and_trial_only_statuses_report_confirmed_true():
+    """Phase 19.1: TRIAL_ONLY joins ENTITLED as the only two statuses that
+    mean genuine real-time data may actually be shown -- every other
+    status (including the new RATE_LIMITED) must report confirmed=False."""
+    confirmed_statuses = {EntitlementStatus.ENTITLED, EntitlementStatus.TRIAL_ONLY}
     for status in EntitlementStatus:
         entitlement = MarketDataEntitlement(provider="massive", status=status, reason="x")
-        assert entitlement.confirmed == (status == EntitlementStatus.ENTITLED)
+        assert entitlement.confirmed == (status in confirmed_statuses)
+
+
+def test_twelve_data_without_api_key_is_unknown():
+    result = resolve_streaming_entitlement(
+        provider_name="twelve_data", api_key="", streaming_entitled_flag=None
+    )
+    assert result.status == EntitlementStatus.UNKNOWN
+    assert result.confirmed is False
+
+
+def test_twelve_data_with_key_is_still_unknown_never_blindly_entitled():
+    """(Phase 19.1 §5) There is deliberately no operator-set flag that can
+    upgrade this -- a valid key alone proves nothing about which symbols
+    (if any) carry real WebSocket access on the Basic/free plan. Only
+    TwelveDataStreamingProvider.entitlement_hint(), fed with genuine wire
+    evidence, may ever upgrade this at runtime (see app.live.service)."""
+    result = resolve_streaming_entitlement(
+        provider_name="twelve_data", api_key="sk-real-key", streaming_entitled_flag=True
+    )
+    assert result.status == EntitlementStatus.UNKNOWN
+    assert result.confirmed is False
+
+
+def test_twelve_data_provider_name_is_normalized_case_insensitively():
+    result = resolve_streaming_entitlement(
+        provider_name="TWELVE_DATA", api_key="sk-real-key", streaming_entitled_flag=None
+    )
+    assert result.provider == "twelve_data"

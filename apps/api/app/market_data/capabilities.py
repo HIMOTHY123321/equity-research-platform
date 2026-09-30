@@ -103,3 +103,27 @@ MASSIVE_CAPABILITIES = ProviderCapabilities(
     news_delay_seconds=None,
     min_poll_interval_seconds=1.0,
 )
+
+# Phase 19.1: Twelve Data's `/v1/quotes/price` WebSocket pushes single price
+# ticks only -- no bid/ask (streaming_quotes=False, never fabricated) and no
+# pre-aggregated OHLCV window (streaming_bars=False; forming candles are
+# folded from price ticks the same honest way the yfinance/quote-only path
+# already does). Each tick is mapped to a StreamTrade (streaming_trades=True)
+# with size=0.0 (the feed carries no per-tick size). REST-only usage (this
+# provider with no WS entitlement, or a rejected/trial-excluded symbol) is
+# capped conservatively via min_poll_interval_seconds -- the Basic/free plan
+# has a genuinely limited daily credit budget, and this is a real,
+# provider-owned throttle, not an arbitrary guess (see docs/decisions and
+# app.market_data.twelve_data_provider's module docstring for the exact
+# figures this was set against).
+TWELVE_DATA_CAPABILITIES = ProviderCapabilities(
+    real_time_quotes=True,
+    streaming_quotes=False,
+    streaming_trades=True,
+    streaming_bars=False,
+    streaming_news=False,
+    historical_intraday=True,
+    quote_delay_seconds=None,
+    news_delay_seconds=None,
+    min_poll_interval_seconds=8.0,
+)
