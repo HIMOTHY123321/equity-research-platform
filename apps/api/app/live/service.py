@@ -79,6 +79,13 @@ class _SymbolState:
     timeframes: set = field(default_factory=set)
     last_quote_timestamp: Optional[datetime] = None
     last_live_quote: Optional[LiveQuote] = None
+    # Phase 19.2 (hybrid provider hardening): set ONLY by genuine streaming
+    # ingestion (ingest_trade/ingest_nbbo), never by the REST poll loop's
+    # ingest_quote -- see _has_fresh_live_data. Keeps "has a genuine live
+    # tick arrived" answerable even if last_live_quote (the UI's display
+    # quote, which may legitimately show a REST quote while streaming is
+    # unavailable) were ever fed from a REST/yfinance fallback source.
+    last_stream_quote: Optional[LiveQuote] = None
     previous_close: Optional[float] = None
     forming_candles: dict = field(default_factory=dict)
     # Phase 12.2 streaming state -- unused (left at defaults) on the
@@ -219,15 +226,24 @@ class LiveMarketService:
         return True
 
     def _has_fresh_live_data(self) -> bool:
-        """True iff at least one currently-subscribed symbol has a live
-        quote whose SOURCE timestamp is still within the "recent" freshness
+        """True iff at least one currently-subscribed symbol has a
+        GENUINE STREAM tick (ingest_trade/ingest_nbbo -- never the REST
+        poll loop's ingest_quote, see _SymbolState.last_stream_quote)
+        whose SOURCE timestamp is still within the "recent" freshness
         window, recomputed against the CURRENT clock every call -- never a
         stale `age_seconds` snapshot from whenever that quote first
         arrived. A symbol that received exactly one tick hours ago and
-        nothing since correctly stops counting as fresh."""
+        nothing since correctly stops counting as fresh.
+
+        Phase 19.2 (hybrid provider): deliberately reads
+        `last_stream_quote`, not `last_live_quote` -- the latter is also
+        the UI's display quote and may legitimately hold a REST/yfinance
+        fallback quote while streaming is unavailable. A fresh REST quote
+        must never be able to satisfy this check; only a tick that
+        genuinely arrived over the WebSocket can."""
         now = self._now()
         for state in self._symbols.values():
-            quote = state.last_live_quote
+            quote = state.last_stream_quote
             if quote is None:
                 continue
             source_ts = quote.freshness.source_timestamp
@@ -676,6 +692,7 @@ class LiveMarketService:
             freshness=freshness,
         )
         state.last_live_quote = live_quote
+        state.last_stream_quote = live_quote
         self._publish(QuoteEvent(symbol=trade.symbol, quote=live_quote))
 
     def ingest_nbbo(self, nbbo: StreamNbbo, received_at: datetime) -> None:
@@ -733,6 +750,7 @@ class LiveMarketService:
             freshness=freshness,
         )
         state.last_live_quote = live_quote
+        state.last_stream_quote = live_quote
         self._publish(QuoteEvent(symbol=nbbo.symbol, quote=live_quote))
 
     def ingest_second_aggregate(self, agg: StreamAggregate, received_at: datetime) -> None:

@@ -7,6 +7,7 @@ this shape before it touches the feature engine or anything above it.
 import math
 from datetime import date, datetime
 from enum import Enum
+from typing import Optional
 
 from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
@@ -98,6 +99,13 @@ class Quote(BaseModel):
     # last-price stand-in rather than an actual quoted spread. Always False
     # for providers with a real NBBO feed.
     is_approximate: bool = False
+    # Phase 19.2 (hybrid provider): which concrete provider actually served
+    # THIS quote -- "twelve_data" or "yfinance" after a fallback, for
+    # example. None for single-provider configurations that have no reason
+    # to disambiguate. Never used to decide REAL TIME eligibility -- that is
+    # exclusively a function of genuine WebSocket ticks (see
+    # app.live.service.LiveMarketService.real_time_available).
+    provider: Optional[str] = None
 
     @field_validator("timestamp")
     @classmethod

@@ -103,13 +103,20 @@ class Settings(BaseSettings):
     # needed, research/development only), "alpaca" (requires an eligible
     # account holder's API credentials below), "massive" (Phase 12.2 --
     # requires massive_api_key below; genuinely pushes trades/quotes/
-    # aggregates over a persistent WebSocket), or "twelve_data" (Phase 19.1
-    # -- requires twelve_data_api_key below; a free-tier-friendly REST +
+    # aggregates over a persistent WebSocket), "twelve_data" (Phase 19.1 --
+    # requires twelve_data_api_key below; a free-tier-friendly REST +
     # trial-WebSocket provider whose actual streaming entitlement is
     # discovered at runtime from subscription acknowledgements, never
     # assumed from a configured key -- see app.live.entitlement and
-    # app.market_data.twelve_data_streaming). Never hard-code a choice
-    # elsewhere in the codebase -- always branch on this setting.
+    # app.market_data.twelve_data_streaming), or "hybrid" (Phase 19.2 --
+    # Twelve Data for genuine live/latest quotes + WebSocket streaming,
+    # yfinance for ALL historical/research candles and as the REST
+    # fallback when Twelve Data is rate-limited/unavailable; see
+    # app.market_data.hybrid_provider for the exact split and
+    # docs/decisions for why yfinance alone was never safe to drop
+    # entirely once free-tier REST credits are the only Twelve Data
+    # budget). Never hard-code a choice elsewhere in the codebase --
+    # always branch on this setting.
     market_data_provider: str = "yfinance"
 
     # News/catalyst provider selection (Phase 10): "yfinance" (default --
@@ -255,7 +262,7 @@ class Settings(BaseSettings):
             problems.append(
                 "MARKET_DATA_PROVIDER must not be 'yfinance' in production -- yfinance is a "
                 "development/research fallback, never a licensed commercial feed. Configure "
-                "'alpaca', 'massive', or 'twelve_data' with real credentials, or run with "
+                "'alpaca', 'massive', 'twelve_data', or 'hybrid' with real credentials, or run with "
                 "market data explicitly in a degraded/unavailable state rather than a silent "
                 "fallback."
             )

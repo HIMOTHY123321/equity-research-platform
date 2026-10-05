@@ -21,6 +21,7 @@ from app.database.session import get_db
 from app.market_data.alpaca_provider import AlpacaMarketDataProvider
 from app.market_data.cache import InMemoryCache
 from app.market_data.cached_provider import CachedMarketDataProvider
+from app.market_data.hybrid_provider import HybridMarketDataProvider
 from app.market_data.massive_provider import MassiveMarketDataProvider
 from app.market_data.provider import MarketDataProvider
 from app.market_data.twelve_data_provider import TwelveDataMarketDataProvider
@@ -64,9 +65,14 @@ def _build_inner_provider() -> MarketDataProvider:
         return MassiveMarketDataProvider()
     if provider_name == "twelve_data":
         return TwelveDataMarketDataProvider()
+    if provider_name == "hybrid":
+        # Phase 19.2: Twelve Data for genuine live/latest quotes, yfinance
+        # for all historical/research pulls -- see
+        # app.market_data.hybrid_provider for exactly why this split.
+        return HybridMarketDataProvider(TwelveDataMarketDataProvider(), YFinanceMarketDataProvider())
     raise ValueError(
         f"Unknown MARKET_DATA_PROVIDER {provider_name!r}; expected 'yfinance', 'alpaca', 'massive', "
-        "or 'twelve_data'"
+        "'twelve_data', or 'hybrid'"
     )
 
 
@@ -93,7 +99,7 @@ def get_streaming_provider() -> "Optional[StreamingMarketDataProvider]":
         from app.market_data.massive_streaming import MassiveStreamingProvider
 
         return MassiveStreamingProvider(settings.massive_api_key, url=settings.massive_ws_url)
-    if provider_name == "twelve_data" and settings.twelve_data_api_key:
+    if provider_name in ("twelve_data", "hybrid") and settings.twelve_data_api_key:
         from app.market_data.twelve_data_streaming import TwelveDataStreamingProvider
 
         # TWELVE_DATA_WS_BASE_URL is the bare host (e.g.
@@ -134,7 +140,7 @@ def get_market_data_entitlement() -> "MarketDataEntitlement":
 
     settings = get_settings()
     provider_name = settings.market_data_provider
-    if provider_name.lower() == "twelve_data":
+    if provider_name.lower() in ("twelve_data", "hybrid"):
         return resolve_streaming_entitlement(
             provider_name=provider_name,
             api_key=settings.twelve_data_api_key,

@@ -68,7 +68,7 @@ def resolve_streaming_entitlement(
     deliberately insufficient."""
     normalized_provider = provider_name.lower()
 
-    if normalized_provider == "twelve_data":
+    if normalized_provider in ("twelve_data", "hybrid"):
         # Phase 19.1: deliberately never resolves ENTITLED/TRIAL_ONLY here,
         # even with a key present -- a valid Basic/free key proves nothing
         # about which symbols (if any) carry real WebSocket access, and
