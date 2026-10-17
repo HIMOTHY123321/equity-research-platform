@@ -13,7 +13,12 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app.api.deps import get_market_data_provider, get_news_provider, get_session_factory
+from app.api.deps import (
+    get_market_data_provider,
+    get_news_provider,
+    get_session_factory,
+    get_streaming_provider,
+)
 from app.database.session import get_db
 from app.live.config import LiveConfig
 from app.main import app
@@ -40,6 +45,17 @@ from app.schemas.market_data import MarketSession, PreviousClose, Quote
 # of the pytest process (see FileSessionFactory's docstring).
 
 _BASE = datetime.now(timezone.utc)
+
+# Phase 19.2.1: a fixed Monday-regular-session instant (2026-10-19 is a
+# Monday; 14:30 UTC = 10:30 EDT, inside 09:30-16:00 ET) -- these tests must
+# pass identically whether pytest happens to run on a weekday, a weekend,
+# or in the middle of the night, so LiveMarketService's clock is pinned
+# here via app.state.live_now_fn (see app.main.lifespan) rather than left
+# on the real wall clock. `_QueueProvider`/`_StaticProvider` quotes are
+# still real-time-stamped off `_BASE` above -- only the service's own
+# "what time is it right now" (used for market_session/freshness_state,
+# never for the quote dedup/ordering logic) is pinned.
+_FIXED_REGULAR_SESSION_NOW = datetime(2026, 10, 19, 14, 30, tzinfo=timezone.utc)
 
 _FAST_CONFIG = LiveConfig(
     target_interval_seconds=0.02,
@@ -166,7 +182,19 @@ def client(file_session_factory):
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
     app.dependency_overrides[get_session_factory] = file_session_factory
     app.dependency_overrides[get_db] = _isolated_get_db_override(db_session_factory)
+    # Phase 19.2.1: these tests are built entirely around LiveMarketService's
+    # REST poll loop (which `_QueueProvider`/`_StaticProvider` above feed
+    # deterministically) -- without this override, the real local
+    # apps/api/.env's MARKET_DATA_PROVIDER=hybrid + a configured
+    # TWELVE_DATA_API_KEY makes get_streaming_provider() hand back a
+    # genuine TwelveDataStreamingProvider, which makes _use_streaming()
+    # True and routes subscriptions through the real WebSocket path
+    # instead -- so the fake provider's quotes are never polled at all and
+    # no "quote" frame ever arrives. None here keeps these tests on the
+    # deterministic poll-loop path regardless of real local configuration.
+    app.dependency_overrides[get_streaming_provider] = lambda: None
     app.state.live_config = _FAST_CONFIG
+    app.state.live_now_fn = lambda: _FIXED_REGULAR_SESSION_NOW
     try:
         with TestClient(app) as test_client:
             test_client.db_session_factory = db_session_factory
@@ -175,6 +203,8 @@ def client(file_session_factory):
         app.dependency_overrides.clear()
         if hasattr(app.state, "live_config"):
             del app.state.live_config
+        if hasattr(app.state, "live_now_fn"):
+            del app.state.live_now_fn
 
 
 @pytest.fixture
@@ -185,7 +215,19 @@ def static_client(file_session_factory):
     app.dependency_overrides[get_news_provider] = lambda: FixtureNewsProvider([])
     app.dependency_overrides[get_session_factory] = file_session_factory
     app.dependency_overrides[get_db] = _isolated_get_db_override(db_session_factory)
+    # Phase 19.2.1: these tests are built entirely around LiveMarketService's
+    # REST poll loop (which `_QueueProvider`/`_StaticProvider` above feed
+    # deterministically) -- without this override, the real local
+    # apps/api/.env's MARKET_DATA_PROVIDER=hybrid + a configured
+    # TWELVE_DATA_API_KEY makes get_streaming_provider() hand back a
+    # genuine TwelveDataStreamingProvider, which makes _use_streaming()
+    # True and routes subscriptions through the real WebSocket path
+    # instead -- so the fake provider's quotes are never polled at all and
+    # no "quote" frame ever arrives. None here keeps these tests on the
+    # deterministic poll-loop path regardless of real local configuration.
+    app.dependency_overrides[get_streaming_provider] = lambda: None
     app.state.live_config = _FAST_CONFIG
+    app.state.live_now_fn = lambda: _FIXED_REGULAR_SESSION_NOW
     try:
         with TestClient(app) as test_client:
             test_client.db_session_factory = db_session_factory
@@ -194,6 +236,8 @@ def static_client(file_session_factory):
         app.dependency_overrides.clear()
         if hasattr(app.state, "live_config"):
             del app.state.live_config
+        if hasattr(app.state, "live_now_fn"):
+            del app.state.live_now_fn
 
 
 # Phase 14.1: MonitoringService now runs for real in every one of these

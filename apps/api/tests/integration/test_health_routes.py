@@ -9,6 +9,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.routes import health as health_routes
+from app.config import Settings
 from app.database.session import get_db
 from app.main import app
 
@@ -49,7 +51,11 @@ def test_health_ready_reports_ok_when_the_database_is_reachable(client):
     assert body["checks"]["database"] == "ok"
 
 
-def test_system_status_reports_yfinance_as_a_development_fallback_by_default(client):
+def test_system_status_reports_yfinance_as_a_development_fallback_by_default(client, monkeypatch):
+    # _env_file=None: this asserts Settings' DEFAULT, which must never
+    # depend on whatever MARKET_DATA_PROVIDER happens to be set to in the
+    # developer's real local apps/api/.env (e.g. "hybrid").
+    monkeypatch.setattr(health_routes, "get_settings", lambda: Settings(_env_file=None))
     response = client.get("/api/system/status")
     assert response.status_code == 200
     body = response.json()

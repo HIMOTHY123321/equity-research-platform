@@ -403,7 +403,11 @@ class LiveMarketService:
             return
         state.last_quote_timestamp = quote.timestamp
 
-        session = current_live_session(quote.timestamp)
+        # Phase 19.2.1: session reflects the CURRENT exchange calendar/clock
+        # (received_at), never the quote's own (possibly stale) timestamp --
+        # a Friday-evening quote must not keep reporting AFTER_HOURS once
+        # the current moment has moved into the weekend (MARKET_CLOSED).
+        session = current_live_session(received_at)
         age_seconds = max((received_at - quote.timestamp).total_seconds(), 0.0)
         freshness = FreshnessInfo(
             source_timestamp=quote.timestamp,
@@ -657,7 +661,9 @@ class LiveMarketService:
         anchor_ts = _latest_timestamp(
             trade.source_timestamp, previous.freshness.source_timestamp if previous else None
         )
-        session = current_live_session(anchor_ts)
+        # Phase 19.2.1: current exchange calendar/clock, not the trade's own
+        # (possibly stale) timestamp -- see ingest_quote's identical note.
+        session = current_live_session(received_at)
         age_seconds = max((received_at - anchor_ts).total_seconds(), 0.0)
         freshness = FreshnessInfo(
             source_timestamp=anchor_ts,
@@ -717,7 +723,9 @@ class LiveMarketService:
         anchor_ts = _latest_timestamp(
             nbbo.source_timestamp, previous.last_trade_timestamp if previous else None
         )
-        session = current_live_session(anchor_ts)
+        # Phase 19.2.1: current exchange calendar/clock, not the NBBO's own
+        # (possibly stale) timestamp -- see ingest_quote's identical note.
+        session = current_live_session(received_at)
         age_seconds = max((received_at - anchor_ts).total_seconds(), 0.0)
         freshness = FreshnessInfo(
             source_timestamp=anchor_ts,
@@ -775,7 +783,10 @@ class LiveMarketService:
             (received_at - agg.window_end).total_seconds(),
         )
 
-        session = current_live_session(agg.window_end)
+        # Phase 19.2.1: current exchange calendar/clock, not the aggregate
+        # window's own (possibly stale) timestamp -- see ingest_quote's
+        # identical note.
+        session = current_live_session(received_at)
         age_seconds = max((received_at - agg.window_end).total_seconds(), 0.0)
         freshness = FreshnessInfo(
             source_timestamp=agg.window_end,

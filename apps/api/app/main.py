@@ -4,6 +4,7 @@ Route modules are added phase-by-phase as the pipeline is built out.
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -122,6 +123,13 @@ async def lifespan(app: FastAPI):
         app.state.dev_mock_streaming_provider = dev_mock_provider
     cache = get_shared_market_data_cache()
     live_config = getattr(app.state, "live_config", DEFAULT_LIVE_CONFIG)
+    # Phase 19.2.1: the same override point `live_config` already uses --
+    # lets a test pin LiveMarketService's clock to a deterministic weekday/
+    # regular-session instant instead of the real wall clock, so a test's
+    # pass/fail never depends on what day/time it happens to actually run
+    # (see tests/integration/test_live_routes.py). Defaults to the real
+    # clock, exactly as before, for every real deployment.
+    live_now_fn = getattr(app.state, "live_now_fn", lambda: datetime.now(timezone.utc))
     # Phase 14.1: routed through the same override point as every other
     # lifespan dependency above -- previously ForecastMonitor/NewsMonitor/
     # MonitoringService imported SessionLocal directly, so a test triggering
@@ -138,6 +146,7 @@ async def lifespan(app: FastAPI):
         market_provider,
         provider_name=provider_name,
         config=live_config,
+        now_fn=live_now_fn,
         streaming_provider=streaming_provider,
         entitlement=entitlement,
     )
