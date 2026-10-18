@@ -81,8 +81,7 @@ export class ApiError extends Error {
  * cross-origin, which still carries a SameSite=Lax cookie). */
 const AUTH_ROUTES_EXEMPT_FROM_REDIRECT = new Set(["/api/auth/login", "/api/auth/signup", "/api/auth/me"]);
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", credentials: "include", ...init });
+async function handleResponse<T>(res: Response, path: string): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => null);
     const message = body?.detail ?? `Request failed (${res.status})`;
@@ -93,6 +92,23 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", credentials: "include", ...init });
+  return handleResponse<T>(res, path);
+}
+
+/** Phase 19.3: login/signup/logout/me must go through this app's OWN
+ * same-origin Next.js routes (src/app/api/auth/*\/route.ts), never
+ * straight to the backend -- the deployed backend's `amd_session` cookie
+ * is host-only to its own onrender.com domain and can never reach the
+ * frontend's different onrender.com domain, so the frontend mints its
+ * own cookie via these routes instead. See src/lib/auth-proxy.ts for the
+ * full explanation. */
+async function requestSameOrigin<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, { cache: "no-store", credentials: "include", ...init });
+  return handleResponse<T>(res, path);
 }
 
 export async function checkApiHealth(): Promise<HealthStatus | null> {
@@ -116,7 +132,7 @@ export interface AuthUser {
 }
 
 export function signup(email: string, password: string): Promise<AuthUser> {
-  return request<{ user: AuthUser }>("/api/auth/signup", {
+  return requestSameOrigin<{ user: AuthUser }>("/api/auth/signup", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -124,7 +140,7 @@ export function signup(email: string, password: string): Promise<AuthUser> {
 }
 
 export function login(email: string, password: string): Promise<AuthUser> {
-  return request<{ user: AuthUser }>("/api/auth/login", {
+  return requestSameOrigin<{ user: AuthUser }>("/api/auth/login", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ email, password }),
@@ -132,7 +148,7 @@ export function login(email: string, password: string): Promise<AuthUser> {
 }
 
 export function logout(): Promise<void> {
-  return request<void>("/api/auth/logout", { method: "POST" });
+  return requestSameOrigin<void>("/api/auth/logout", { method: "POST" });
 }
 
 /** Resolves to `null` (never throws) when there is no valid session --
@@ -140,7 +156,7 @@ export function logout(): Promise<void> {
  * profile. */
 export async function getCurrentUser(): Promise<AuthUser | null> {
   try {
-    return await request<AuthUser>("/api/auth/me");
+    return await requestSameOrigin<AuthUser>("/api/auth/me");
   } catch (err) {
     if (err instanceof ApiError && err.status === 401) return null;
     throw err;
