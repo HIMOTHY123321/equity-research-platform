@@ -18,16 +18,23 @@ import contextlib
 import logging
 from typing import Literal, Optional
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, Request, WebSocket, WebSocketDisconnect
 from pydantic import BaseModel, ValidationError
 from sqlalchemy import select
 
 from app.alerts.repository import SqlAlchemyAlertRepository
 from app.alerts.service import AlertEmittedEvent
 from app.auth.cookies import SESSION_COOKIE_NAME
+from app.auth.dependencies import get_current_user_and_session
 from app.auth.repository import SqlAlchemyUserRepository
 from app.auth.security import InvalidTokenError, decode_access_token
 from app.auth.sessions import SqlAlchemyUserSessionRepository
+from app.auth.ws_ticket import (
+    WS_TICKET_TTL_SECONDS,
+    consume_ws_ticket_once,
+    create_ws_ticket,
+    decode_ws_ticket,
+)
 from app.database.models import User, UserAlertDeliveryRecord, UserMonitoringSubscriptionRecord
 from app.database.session import get_db
 from app.live.config import DEFAULT_LIVE_CONFIG, SubscriptionPriority
@@ -217,6 +224,20 @@ def live_status(request: Request) -> dict:
     }
 
 
+@router.post("/ws-ticket")
+def issue_ws_ticket(user_and_session: tuple[User, str] = Depends(get_current_user_and_session)) -> dict:
+    """Phase 19.6: the only way a browser obtains credentials for the
+    `/api/live/stream` WebSocket in deployment. Requires the SAME
+    cookie-authenticated, same-origin REST path every other request uses
+    (so it can be reached through the existing `/api/backend/*` proxy) --
+    see app.auth.ws_ticket for exactly what the returned ticket is and
+    isn't allowed to do. Never logs the ticket; the response never
+    contains the caller's real session JWT."""
+    user, session_jti = user_and_session
+    ticket = create_ws_ticket(user.id, session_jti)
+    return {"ticket": ticket.token, "expires_in": WS_TICKET_TTL_SECONDS}
+
+
 def _open_session(websocket: WebSocket):
     """Resolves a DB session through `app.dependency_overrides` (same
     pattern app.main.lifespan already uses for get_session_factory) rather
@@ -232,16 +253,76 @@ def _open_session(websocket: WebSocket):
     return session, session_gen
 
 
-def _authenticate_websocket_user(websocket: WebSocket, token: Optional[str]) -> Optional[User]:
-    """Phase 16.1 (§2): a validated, still-live (unexpired, unrevoked --
-    see app.auth.sessions) session is required to open this connection at
-    all. The token travels as the same HttpOnly session cookie every HTTP
-    route uses (app.auth.cookies) -- browsers automatically attach cookies
-    to a same-site WebSocket handshake request, so no query-string token
-    is needed and none is ever accepted. `token` is accepted as a plain
-    string purely so this function stays directly unit-testable without a
-    real WebSocket handshake; the only caller below always passes the
-    cookie value, never a query parameter."""
+# Phase 19.6.1: the ticket travels as a `Sec-WebSocket-Protocol` entry, NOT
+# a query-string parameter. docs/deployment.md already documented (before
+# this feature existed, for the cookie path) that nothing may ever appear
+# in this handshake's URL, browser history, or server access logs --
+# app.market_data.twelve_data_provider made the identical call for its own
+# API key (header auth, not `?apikey=`) for the same reason: a query
+# string is far more likely to be captured by Uvicorn's own access log,
+# Render's edge/platform logs, or an intermediate reverse proxy than a
+# subprotocol value, which is carried only in the `Sec-WebSocket-Protocol`
+# request header and is not part of the request line/URL at all. The
+# client offers exactly two subprotocol values, in this fixed order: the
+# marker below, then the ticket itself (a JWT's compact-serialization
+# characters are all valid HTTP token characters, so no extra encoding is
+# needed). The server must echo back ONE of the client's offered
+# subprotocols in its own `Sec-WebSocket-Protocol` response header (RFC
+# 6455 §4.2.2) for the browser to accept the connection as having that
+# subprotocol negotiated -- see `websocket.accept(subprotocol=...)` below.
+WS_TICKET_SUBPROTOCOL = "ws-ticket"
+
+
+def _extract_ticket_from_subprotocols(websocket: WebSocket) -> Optional[str]:
+    """ASGI servers (uvicorn) parse the raw `Sec-WebSocket-Protocol`
+    request header into `scope["subprotocols"]` for us -- a list of the
+    exact tokens the client offered, in order, already comma-split and
+    trimmed. Only matches the fixed two-entry shape produced by
+    `liveClient.ts`; anything else (no subprotocols offered at all, a
+    different marker, extra entries) is treated as "no ticket offered,"
+    which falls back to cookie auth below rather than guessing."""
+    offered = websocket.scope.get("subprotocols") or []
+    if len(offered) == 2 and offered[0] == WS_TICKET_SUBPROTOCOL:
+        return offered[1]
+    return None
+
+
+def _authenticate_websocket_by_ticket(websocket: WebSocket, ticket: str) -> Optional[User]:
+    """Phase 19.6: the deployed path. The frontend and backend are
+    different hosts in production, so the frontend's own HttpOnly
+    `amd_session` cookie (host-only to ITS domain) can never reach this
+    handshake -- see app.auth.ws_ticket for what the ticket actually is.
+    Rejects malformed/expired/wrong-purpose tokens, an already-used
+    ticket (replay), a ticket whose originating session has since been
+    revoked/logged-out, and a ticket for a no-longer-active user -- any
+    of those simply fail closed (no WS connection), never degrading to
+    treating the caller as anonymous-but-connected."""
+    try:
+        payload = decode_ws_ticket(ticket)
+    except InvalidTokenError:
+        return None
+    if not consume_ws_ticket_once(payload.ticket_jti, payload.expires_at):
+        return None
+    session, session_gen = _open_session(websocket)
+    try:
+        if not SqlAlchemyUserSessionRepository(session).is_valid(payload.session_jti):
+            return None
+        user = SqlAlchemyUserRepository(session).get_by_id(payload.user_id)
+        return user if (user is not None and user.status == "active") else None
+    finally:
+        next(session_gen, None)
+
+
+def _authenticate_websocket_by_cookie(websocket: WebSocket, token: Optional[str]) -> Optional[User]:
+    """Phase 16.1 (§2): the local-dev path, preserved for parity with
+    every other HTTP route's cookie auth. Works today because local dev
+    runs the frontend and backend on the same hostname ("localhost"),
+    where cookies are not port-scoped -- see the Phase 19.6 report for
+    why this does NOT work once frontend and backend are on genuinely
+    different hosts (the deployed case), which is what the ticket path
+    above exists to fix. `token` is accepted as a plain string purely so
+    this function stays directly unit-testable without a real WebSocket
+    handshake."""
     if not token:
         return None
     try:
@@ -256,6 +337,14 @@ def _authenticate_websocket_user(websocket: WebSocket, token: Optional[str]) -> 
         return user if (user is not None and user.status == "active") else None
     finally:
         next(session_gen, None)
+
+
+def _authenticate_websocket_user(
+    websocket: WebSocket, token: Optional[str], ticket: Optional[str] = None
+) -> Optional[User]:
+    if ticket:
+        return _authenticate_websocket_by_ticket(websocket, ticket)
+    return _authenticate_websocket_by_cookie(websocket, token)
 
 
 def _user_monitors_symbol(websocket: WebSocket, user_id, symbol: str) -> bool:
@@ -298,7 +387,8 @@ def _user_has_delivery(websocket: WebSocket, user_id, alert_id: str) -> bool:
 
 @router.websocket("/stream")
 async def live_stream(websocket: WebSocket) -> None:
-    user = _authenticate_websocket_user(websocket, websocket.cookies.get(SESSION_COOKIE_NAME))
+    ticket = _extract_ticket_from_subprotocols(websocket)
+    user = _authenticate_websocket_user(websocket, websocket.cookies.get(SESSION_COOKIE_NAME), ticket)
     if user is None:
         await websocket.close(code=4401)
         return
@@ -312,7 +402,13 @@ async def live_stream(websocket: WebSocket) -> None:
     monitoring_service = getattr(app_state, "monitoring_service", None)
     live_config = getattr(app_state, "live_config", DEFAULT_LIVE_CONFIG)
 
-    await websocket.accept()
+    # Echo back the client's offered subprotocol when a ticket was used --
+    # RFC 6455 §4.2.2 requires the server to name one of the offered
+    # protocols in its own response for the browser to treat the
+    # subprotocol negotiation as successful; omitting it entirely is ALSO
+    # spec-valid ("no subprotocol selected") but ticket-authenticated
+    # connections echo it explicitly rather than relying on that.
+    await websocket.accept(subprotocol=WS_TICKET_SUBPROTOCOL if ticket else None)
 
     outbound: "asyncio.Queue[dict]" = asyncio.Queue()
     subscribed_symbols: set[str] = set()

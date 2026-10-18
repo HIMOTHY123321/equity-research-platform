@@ -64,12 +64,16 @@ def _decode_and_verify(token: str, session_repository: SessionRepository) -> Tok
     return payload
 
 
-def get_current_user(
+def get_current_user_and_session(
     session_cookie: Optional[str] = Cookie(default=None, alias=SESSION_COOKIE_NAME),
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer_scheme),
     user_repository: UserRepository = Depends(get_user_repository),
     session_repository: SessionRepository = Depends(get_session_repository),
-) -> User:
+) -> tuple[User, str]:
+    """Same identity/validity checks as `get_current_user`, but also returns
+    the session's own `jti` -- needed only by endpoints (currently just WS
+    ticket issuance, app.api.routes.live) that must bind something they
+    issue to the CALLER'S specific session, not just their user id."""
     token = _extract_token(session_cookie, credentials)
     if token is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
@@ -78,7 +82,11 @@ def get_current_user(
     user = user_repository.get_by_id(payload.user_id)
     if user is None or user.status != "active":
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid session")
-    return user
+    return user, payload.jti
+
+
+def get_current_user(pair: tuple[User, str] = Depends(get_current_user_and_session)) -> User:
+    return pair[0]
 
 
 def get_current_user_optional(

@@ -1,6 +1,6 @@
 "use client";
 
-import { getApiBaseUrl } from "@/lib/api";
+import { getApiBaseUrl, getLiveStreamTicket } from "@/lib/api";
 import type {
   ConnectionStateKind,
   LiveCandle,
@@ -34,6 +34,11 @@ interface SymbolCacheEntry {
 const RECONNECT_INITIAL_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
+// Must match app.api.routes.live.WS_TICKET_SUBPROTOCOL on the backend
+// exactly -- the fixed marker the server looks for as the FIRST offered
+// Sec-WebSocket-Protocol entry, with the ticket itself as the second.
+const WS_TICKET_SUBPROTOCOL = "ws-ticket";
+
 // Mirrors app.live.config.SubscriptionPriority's ordering -- lower index
 // wins when multiple hooks subscribe to the same symbol at different
 // priorities (e.g. the viewed ticker is also on the watchlist).
@@ -63,8 +68,39 @@ class LiveClient {
     if (this.ws !== null || this.connecting) return;
     if (typeof window === "undefined") return; // never connect during SSR
     this.connecting = true;
+    void this.connect();
+  }
 
-    const socket = new WebSocket(this.wsUrl());
+  private async connect(): Promise<void> {
+    // Every (re)connect -- including every reconnect attempt scheduled by
+    // scheduleReconnect below -- fetches a brand NEW ticket rather than
+    // reusing one: tickets are single-use and live only ~45s, far shorter
+    // than the reconnect backoff can grow to, so an old ticket would
+    // already be rejected by the backend even before considering reuse.
+    let ticket: string;
+    try {
+      ticket = (await getLiveStreamTicket()).ticket;
+    } catch {
+      this.connecting = false;
+      this.scheduleReconnect();
+      return;
+    }
+    // ensureConnected's guard above prevents a second concurrent connect
+    // from starting, so this.ws is still null here.
+
+    // Security review (post Phase 19.6): the ticket must NEVER appear in
+    // the WebSocket URL -- a query string is far more likely to be
+    // captured by a server access log, a reverse proxy's own logs, or
+    // browser history than a Sec-WebSocket-Protocol value is (see
+    // app.api.routes.live's WS_TICKET_SUBPROTOCOL docstring on the
+    // backend for the full reasoning, which mirrors docs/deployment.md's
+    // existing "nothing in this handshake's URL" rule and
+    // app.market_data.twelve_data_provider's identical header-over-
+    // query-string choice for its own API key). The WebSocket
+    // constructor's second argument is the list of subprotocols offered
+    // in the `Sec-WebSocket-Protocol` request header -- not part of the
+    // URL/request-line at all.
+    const socket = new WebSocket(this.wsUrl(), [WS_TICKET_SUBPROTOCOL, ticket]);
     this.ws = socket;
 
     socket.onopen = () => {

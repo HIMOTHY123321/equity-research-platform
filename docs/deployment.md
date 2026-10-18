@@ -203,13 +203,45 @@ core revocation mechanism itself.
   future work, not a correctness gap (it only ever over-scans, never
   leaks data).
 
-## WebSocket authentication (Phase 16.1)
+## WebSocket authentication (Phase 16.1 / Phase 19.6.1)
 
-`/api/live/stream` authenticates off the same HttpOnly session cookie
-every HTTP route uses -- browsers attach cookies to a same-site WebSocket
-handshake automatically, so no token ever appears in the URL, browser
-history, or server access logs. A query-string `?token=` is explicitly
-rejected even if it names a genuinely valid token.
+`/api/live/stream` authenticates in one of two ways, and nothing it
+accepts ever appears in the URL, browser history, or server access logs.
+
+- **Local dev (same hostname, different ports):** the same HttpOnly
+  session cookie every HTTP route uses -- browsers attach cookies to a
+  same-site WebSocket handshake automatically.
+- **Deployed (frontend and backend are genuinely different hosts, so that
+  cookie is host-only and can't reach the backend):** a short-lived
+  (~45s), single-use ticket, obtained by the frontend through the normal
+  same-origin, cookie-authenticated REST path (`POST /api/live/ws-ticket`)
+  and then presented via the `Sec-WebSocket-Protocol` handshake header --
+  NOT a query string. A `?ticket=`/`?token=` query parameter is explicitly
+  rejected even if it names a genuinely valid token/ticket: a query string
+  is far more likely to be captured by Uvicorn's own access log, Render's
+  edge/platform logs, or an intermediate reverse proxy's logs than a
+  header-only value is (the exact same reasoning already applied to the
+  Twelve Data provider's own API key -- see
+  app.market_data.twelve_data_provider). See app.auth.ws_ticket and
+  app.api.routes.live.WS_TICKET_SUBPROTOCOL for the full design: the
+  ticket is bound to its originating session's `jti` (so logout revokes
+  it too), rejects replay via a process-local single-use guard (best-
+  effort only -- see the caveat below), and is never the real session
+  JWT.
+
+**Known limitation, accepted for this deployment shape:** the replay
+guard (`app.auth.ws_ticket._ReplayGuard`) is in-process memory, not a
+shared store. It is correct for a single API process/instance. If this
+ever runs as more than one horizontally-scaled API replica, a ticket
+could theoretically be replayed once against a *different* replica
+before its ~45s expiry, since each replica tracks "already used" tickets
+independently. This was a deliberate scope decision -- no Redis or other
+shared persistence was introduced to close it, since every other
+rejection (signature, expiry, purpose/type, revoked session, inactive
+user) still applies regardless of replica count, and the exposure window
+is both short-lived and requires an attacker to have already obtained a
+valid ticket in the first place (itself requiring a valid, unrevoked
+session). Revisit if/when this deployment moves to >1 API replica.
 
 Per-connection frame filtering: `alert_event` frames only reach a
 connection if that user has a delivery for the specific alert;

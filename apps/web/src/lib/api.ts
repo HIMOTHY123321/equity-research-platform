@@ -221,6 +221,21 @@ export function getLiveStatus(): Promise<LiveStatusResponse> {
   return request<LiveStatusResponse>("/api/live/status");
 }
 
+/** Phase 19.6: issues a short-lived (tens of seconds), single-use WS
+ * ticket -- the only thing `liveClient.ts` is allowed to put on the
+ * WebSocket URL. Goes through the same `request()` helper (and so the
+ * same `/api/backend/*` same-origin proxy in the browser) as every other
+ * authenticated REST call -- never a new/dedicated proxy route, and the
+ * real session JWT never appears in this response. */
+export interface WsTicket {
+  ticket: string;
+  expires_in: number;
+}
+
+export function getLiveStreamTicket(): Promise<WsTicket> {
+  return request<WsTicket>("/api/live/ws-ticket", { method: "POST" });
+}
+
 // ---- Dev-only live simulator (Phase 17 §60/§79/§99) ------------------------
 // Every one of these 404s unless the backend has ENABLE_DEV_LIVE_SIMULATOR
 // set (impossible in production -- see app.api.routes.dev_live). Only

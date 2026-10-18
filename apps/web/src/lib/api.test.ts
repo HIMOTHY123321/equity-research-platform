@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getCurrentUser, getWatchlist, login, logout, signup } from "@/lib/api";
+import { getCurrentUser, getLiveStreamTicket, getWatchlist, login, logout, signup } from "@/lib/api";
 
 const SAMPLE_USER = {
   id: "u1",
@@ -84,5 +84,20 @@ describe("lib/api normal REST calls (Phase 19.4: through the general /api/backen
     await getWatchlist();
 
     expect(fetchSpy).toHaveBeenCalledWith("/api/backend/api/watchlist", expect.anything());
+  });
+
+  it("getLiveStreamTicket POSTs through the same-origin /api/backend proxy, never directly to the backend", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ ticket: "a.b.c", expires_in: 45 }), { status: 200 }));
+
+    const result = await getLiveStreamTicket();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/backend/api/live/ws-ticket",
+      expect.objectContaining({ method: "POST" }),
+    );
+    expect(result.ticket).toBe("a.b.c");
   });
 });
