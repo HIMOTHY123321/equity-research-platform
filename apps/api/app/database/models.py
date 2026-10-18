@@ -18,11 +18,13 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
@@ -97,6 +99,23 @@ class Symbol(Base):
 
 class Watchlist(Base):
     __tablename__ = "watchlists"
+    __table_args__ = (
+        # Phase 19.5: at most one `is_default=True` row per user --
+        # app.watchlist.repository._get_or_create_default_watchlist()
+        # assumes exactly this, and a MultipleResultsFound crash in
+        # production (duplicate rows created by a since-fixed race, see
+        # migration 0012) is exactly what happens without it. A partial
+        # index, not a plain UniqueConstraint on (user_id, is_default):
+        # this must never limit a user to only one NON-default watchlist
+        # too, even though no code path creates one today.
+        Index(
+            "uq_watchlists_user_default",
+            "user_id",
+            unique=True,
+            postgresql_where=text("is_default = true"),
+            sqlite_where=text("is_default = 1"),
+        ),
+    )
 
     id: Mapped[uuid.UUID] = _uuid_pk()
     user_id: Mapped[Optional[uuid.UUID]] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))

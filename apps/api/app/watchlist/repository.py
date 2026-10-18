@@ -18,15 +18,87 @@ import threading
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.database.models import Base, Symbol, Watchlist, WatchlistSymbol
 from app.schemas.symbols import normalize_ticker
 
 DEFAULT_WATCHLIST_SYMBOLS = ("SPY", "QQQ", "NVDA", "AAPL", "MSFT", "META", "AMZN", "TSLA")
+
+
+def repair_duplicate_default_watchlists(session: Session) -> int:
+    """Phase 19.5: merges and removes duplicate `is_default=True` rows per
+    user -- the exact corrupted state `uq_watchlists_user_default`
+    (alembic/versions/0012_watchlist_default_uniqueness.py) prevents going
+    forward, but cannot retroactively fix on an already-corrupted table
+    (creating a unique index over data that violates it fails outright).
+
+    Never destructive: every symbol membership on a duplicate row is
+    merged onto the canonical row (the OLDEST by `created_at`, ties
+    broken by `id` for full determinism) before that duplicate row is
+    deleted. A symbol already present on the canonical row is dropped
+    from the duplicate rather than ever being repointed in a way that
+    would violate `uq_watchlist_symbol` (watchlist_id, symbol_id).
+
+    Called once by migration 0012's `upgrade()` against the real
+    deployed database (via an ORM Session bound to the migration's own
+    connection), and directly from tests. Returns the number of duplicate
+    watchlist rows removed."""
+    user_ids_with_duplicates = (
+        session.execute(
+            select(Watchlist.user_id)
+            .where(Watchlist.is_default.is_(True))
+            .group_by(Watchlist.user_id)
+            .having(func.count(Watchlist.id) > 1)
+        )
+        .scalars()
+        .all()
+    )
+
+    removed = 0
+    for user_id in user_ids_with_duplicates:
+        rows = (
+            session.execute(
+                select(Watchlist)
+                .where(Watchlist.user_id == user_id, Watchlist.is_default.is_(True))
+                .order_by(Watchlist.created_at.asc(), Watchlist.id.asc())
+            )
+            .scalars()
+            .all()
+        )
+        canonical, *duplicates = rows
+
+        canonical_symbol_ids = set(
+            session.execute(
+                select(WatchlistSymbol.symbol_id).where(WatchlistSymbol.watchlist_id == canonical.id)
+            )
+            .scalars()
+            .all()
+        )
+
+        for duplicate in duplicates:
+            memberships = (
+                session.execute(select(WatchlistSymbol).where(WatchlistSymbol.watchlist_id == duplicate.id))
+                .scalars()
+                .all()
+            )
+            for membership in memberships:
+                if membership.symbol_id in canonical_symbol_ids:
+                    session.delete(membership)
+                else:
+                    membership.watchlist_id = canonical.id
+                    canonical_symbol_ids.add(membership.symbol_id)
+            session.flush()
+            session.delete(duplicate)
+            removed += 1
+
+    session.commit()
+    return removed
 
 
 @dataclass(frozen=True)
@@ -103,22 +175,44 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
             checkfirst=True,
         )
 
-    def _get_or_create_default_watchlist(self) -> Watchlist:
-        watchlist = self._session.execute(
+    def _select_default_watchlist(self) -> Optional[Watchlist]:
+        return self._session.execute(
             select(Watchlist).where(Watchlist.user_id == self._user_id, Watchlist.is_default.is_(True))
         ).scalar_one_or_none()
+
+    def _get_or_create_default_watchlist(self) -> Watchlist:
+        watchlist = self._select_default_watchlist()
         if watchlist is not None:
             return watchlist
 
         watchlist = Watchlist(user_id=self._user_id, name="My Watchlist", is_default=True)
         self._session.add(watchlist)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError:
+            # Phase 19.5: a concurrent request for this SAME user (two
+            # dashboard panels firing /api/watchlist near-simultaneously
+            # on first load, signup immediately followed by a fetch, two
+            # browser tabs, a retried request after a slow response,
+            # ...) won the race and already committed its own default
+            # watchlist -- `uq_watchlists_user_default`
+            # (migration 0012) is what makes this detectable instead of
+            # letting a second default row through silently. Roll back
+            # this half-finished insert and read back the WINNING row
+            # instead of ever seeding default symbols twice.
+            self._session.rollback()
+            watchlist = self._select_default_watchlist()
+            if watchlist is not None:
+                return watchlist
+            raise  # pragma: no cover -- the winning row vanished between the conflict and this re-read
         self._session.refresh(watchlist)
 
         # First-time seed only (mirrors InMemoryWatchlistRepository's own
         # default-symbols behavior) -- a brand-new user gets a populated
         # starting watchlist instead of an empty one; every subsequent
-        # call finds the row above and never reseeds.
+        # call finds the row above and never reseeds. Safe from the
+        # duplicate-seeding race above: nothing else can know this
+        # brand-new watchlist's id yet.
         now = datetime.now(timezone.utc)
         for ticker in DEFAULT_WATCHLIST_SYMBOLS:
             symbol = self._get_or_create_symbol(ticker)
@@ -132,7 +226,20 @@ class SqlAlchemyWatchlistRepository(WatchlistRepository):
             return symbol
         symbol = Symbol(ticker=ticker)
         self._session.add(symbol)
-        self._session.commit()
+        try:
+            self._session.commit()
+        except IntegrityError:
+            # Same class of race as _get_or_create_default_watchlist, but
+            # on the globally-shared `symbols` table: two different
+            # users' concurrent first-ever watchlist creation can race to
+            # create the same brand-new ticker's row (e.g. "SPY") at the
+            # same moment -- Symbol.ticker's existing unique constraint
+            # is what surfaces that here.
+            self._session.rollback()
+            symbol = self._session.execute(select(Symbol).where(Symbol.ticker == ticker)).scalar_one_or_none()
+            if symbol is not None:
+                return symbol
+            raise  # pragma: no cover -- the winning row vanished between the conflict and this re-read
         self._session.refresh(symbol)
         return symbol
 
