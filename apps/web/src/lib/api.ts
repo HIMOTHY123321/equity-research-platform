@@ -94,8 +94,25 @@ async function handleResponse<T>(res: Response, path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+/** Phase 19.4: every browser-side call goes through the same-origin
+ * `/api/backend/*` proxy (src/app/api/backend/[...path]/route.ts), never
+ * straight to the backend -- the deployed backend's `amd_session` cookie
+ * is host-only to its own onrender.com domain, so a direct cross-origin
+ * call from the browser can never carry it. The proxy reads the
+ * FRONTEND's own cookie server-side and forwards it as a Bearer token.
+ *
+ * Server Components (e.g. app/page.tsx's `checkApiHealth()` during SSR)
+ * call the backend directly instead: that fetch runs on this Node
+ * process, never in a browser, so there is no CORS/cross-site-cookie
+ * question to begin with, and no relative URL to resolve against either
+ * (unlike a browser, Next's server-side `fetch` cannot resolve a
+ * relative path against "this app's own origin" at all). */
+function requestUrl(path: string): string {
+  return typeof window === "undefined" ? `${getApiBaseUrl()}${path}` : `/api/backend${path}`;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${getApiBaseUrl()}${path}`, { cache: "no-store", credentials: "include", ...init });
+  const res = await fetch(requestUrl(path), { cache: "no-store", credentials: "include", ...init });
   return handleResponse<T>(res, path);
 }
 

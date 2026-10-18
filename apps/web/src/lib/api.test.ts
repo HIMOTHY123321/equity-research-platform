@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getCurrentUser, login, logout, signup } from "@/lib/api";
+import { getCurrentUser, getWatchlist, login, logout, signup } from "@/lib/api";
 
 const SAMPLE_USER = {
   id: "u1",
@@ -68,5 +68,21 @@ describe("lib/api auth calls (Phase 19.3: same-origin, never cross-origin)", () 
     const user = await getCurrentUser();
 
     expect(user?.email).toBe("trader@example.com");
+  });
+});
+
+describe("lib/api normal REST calls (Phase 19.4: through the general /api/backend proxy)", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  it("getWatchlist calls the same-origin /api/backend proxy, never NEXT_PUBLIC_API_URL directly", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi.spyOn(global, "fetch").mockResolvedValue(new Response("[]", { status: 200 }));
+
+    await getWatchlist();
+
+    expect(fetchSpy).toHaveBeenCalledWith("/api/backend/api/watchlist", expect.anything());
   });
 });
