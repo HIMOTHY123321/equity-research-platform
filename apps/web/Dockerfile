@@ -12,16 +12,15 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
-RUN useradd --create-home --uid 1000 appuser
-USER appuser
+USER node
 
 # This is a monorepo (turbopack root = repo root, see next.config.ts), so
 # Next.js nests the traced standalone output under apps/web/ instead of
 # putting server.js at the output root -- copy the whole nested tree and
 # point CMD/static/public copies at that same nested path.
-COPY --from=build --chown=appuser:appuser /app/.next/standalone ./
-COPY --from=build --chown=appuser:appuser /app/.next/static ./apps/web/.next/static
-COPY --from=build --chown=appuser:appuser /app/public ./apps/web/public
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./apps/web/.next/static
+COPY --from=build --chown=node:node /app/public ./apps/web/public
 
 EXPOSE 3000
 ENV PORT=3000
