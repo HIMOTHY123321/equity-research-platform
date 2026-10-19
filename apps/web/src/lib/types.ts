@@ -1968,6 +1968,80 @@ export interface PushStatus {
   configured: boolean;
 }
 
+/** Long-Term Investing Research (app.long_term_research) -- a feature
+ * wholly separate from the Decision Engine's short/medium-term setup
+ * tracking above. One of eight closed-enum deterministic outcomes;
+ * never a 0-100 score, never the literal words BUY/SELL. */
+export type LongTermResearchState =
+  | "ACCUMULATION_CANDIDATE"
+  | "WATCH_FOR_BETTER_ENTRY"
+  | "HOLDING_THESIS_INTACT"
+  | "LONG_TERM_THESIS_STRENGTHENING"
+  | "LONG_TERM_THESIS_WEAKENING"
+  | "REVIEW_POSITION"
+  | "THESIS_INVALIDATED"
+  | "NOT_ENOUGH_EVIDENCE";
+
+export type BusinessQualityState = "STRONG" | "STABLE" | "WEAK" | "NOT_ENOUGH_EVIDENCE";
+export type EarningsTrendState = "IMPROVING" | "STABLE" | "WEAKENING" | "NOT_ENOUGH_EVIDENCE";
+export type ValuationState = "CHEAP" | "REASONABLE" | "EXPENSIVE" | "NOT_ENOUGH_EVIDENCE";
+export type GrowthState = "STRONG" | "MODERATE" | "WEAK" | "NOT_ENOUGH_EVIDENCE";
+export type LongTermTrendState = "CONSTRUCTIVE" | "NEUTRAL" | "WEAKENING" | "NOT_ENOUGH_EVIDENCE";
+export type LongTermEvidenceQuality = "STRONG" | "MODERATE" | "WEAK" | "NOT_ENOUGH_EVIDENCE";
+
+export interface LongTermFactorEvidence {
+  positive: string[];
+  negative: string[];
+  missing: string[];
+}
+
+export interface LongTermFactorBundle {
+  business_quality: BusinessQualityState;
+  business_quality_evidence: LongTermFactorEvidence;
+  earnings_trend: EarningsTrendState;
+  earnings_trend_evidence: LongTermFactorEvidence;
+  valuation: ValuationState;
+  valuation_evidence: LongTermFactorEvidence;
+  growth: GrowthState;
+  growth_evidence: LongTermFactorEvidence;
+  long_term_trend: LongTermTrendState;
+  long_term_trend_evidence: LongTermFactorEvidence;
+  history_days: number;
+  limited_history: boolean;
+  accumulation_area_low: number | null;
+  accumulation_area_high: number | null;
+  invalidation_level: number | null;
+}
+
+export interface LongTermResearchResult {
+  symbol: string;
+  as_of: string;
+  price: number | null;
+  research_state: LongTermResearchState;
+  factors: LongTermFactorBundle;
+  evidence_quality: LongTermEvidenceQuality;
+  positive_evidence: string[];
+  negative_evidence: string[];
+  contradictions: string[];
+  missing_evidence: string[];
+  reason: string;
+  what_would_change_state: string;
+  market_data_provider: string;
+  fundamentals_provider: string;
+  pipeline_version: string;
+  ai_summary: string | null;
+}
+
+export interface LongTermScanResponse {
+  as_of: string;
+  results: LongTermResearchResult[];
+}
+
+export interface LongTermPushPreference {
+  enabled: boolean;
+  key_configured: boolean;
+}
+
 // The cross-symbol Decision Scanner (§9/§36): NOT a ranking -- one row per
 // monitored symbol, urgency-sorted by the same severity table alerts use.
 // `state: null` means no DecisionPlan exists for this symbol at all, distinct

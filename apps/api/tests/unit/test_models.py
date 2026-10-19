@@ -50,6 +50,8 @@ EXPECTED_TABLES = {
     "user_alert_deliveries",
     "user_alert_preferences",
     "user_push_preferences",
+    "long_term_research_snapshots",
+    "long_term_scheduled_scan_runs",
 }
 
 

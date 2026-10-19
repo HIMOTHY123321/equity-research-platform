@@ -12,12 +12,14 @@ import {
   enableMonitoring,
   getAlertPreferences,
   getLiveStatus,
+  getLongTermPushPreference,
   getMyPlan,
   getPushPreference,
   getPushStatus,
   getSystemStatus,
   listMonitoring,
   setAlertPreference,
+  setLongTermPushPreference,
   setPushKey,
   setPushPreference,
   type PlanOut,
@@ -245,20 +247,23 @@ function ProviderStatusSection() {
 function PushNotificationsSection() {
   const [configured, setConfigured] = useState<boolean | null>(null);
   const [enabled, setEnabled] = useState(false);
+  const [longTermEnabled, setLongTermEnabled] = useState(false);
   const [keyConfigured, setKeyConfigured] = useState(false);
   const [state, setState] = useState<"loading" | "ready" | "error">("loading");
   const [saving, setSaving] = useState(false);
+  const [savingLongTerm, setSavingLongTerm] = useState(false);
   const [keyInput, setKeyInput] = useState("");
   const [keyError, setKeyError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getPushStatus(), getPushPreference()])
-      .then(([status, pref]) => {
+    Promise.all([getPushStatus(), getPushPreference(), getLongTermPushPreference()])
+      .then(([status, pref, longTermPref]) => {
         if (cancelled) return;
         setConfigured(status.configured);
         setEnabled(pref.enabled);
         setKeyConfigured(pref.key_configured);
+        setLongTermEnabled(longTermPref.enabled);
         setState("ready");
       })
       .catch(() => !cancelled && setState("error"));
@@ -277,6 +282,19 @@ function PushNotificationsSection() {
       void (err instanceof ApiError ? err.message : err);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function toggleLongTerm(next: boolean) {
+    setLongTermEnabled(next);
+    setSavingLongTerm(true);
+    try {
+      await setLongTermPushPreference(next);
+    } catch (err) {
+      setLongTermEnabled(!next);
+      void (err instanceof ApiError ? err.message : err);
+    } finally {
+      setSavingLongTerm(false);
     }
   }
 
@@ -380,6 +398,33 @@ function PushNotificationsSection() {
             </button>
           </div>
           {!keyConfigured && <p className="text-[10px] text-muted">Save your Pushover key above to enable.</p>}
+
+          <div className="flex items-center justify-between gap-2 border-t border-border pt-3">
+            <span>
+              Enable Long-Term Research notifications
+              <span className="ml-1 block text-[10px] text-muted">
+                A new accumulation candidate, a thesis strengthening/weakening, a review warranted, or a thesis
+                invalidated -- from the once-daily long-term scan. Uses the same Pushover key above.
+              </span>
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={longTermEnabled}
+              aria-label={`${longTermEnabled ? "Disable" : "Enable"} long-term research notifications`}
+              disabled={configured === false || !keyConfigured || savingLongTerm}
+              onClick={() => toggleLongTerm(!longTermEnabled)}
+              className={`h-4 w-8 shrink-0 rounded-full transition-colors disabled:opacity-50 ${
+                longTermEnabled ? "bg-accent" : "bg-border"
+              }`}
+            >
+              <span
+                className={`block h-3 w-3 rounded-full bg-background transition-transform ${
+                  longTermEnabled ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
         </div>
       )}
     </Section>

@@ -39,6 +39,8 @@ if TYPE_CHECKING:
     from app.live.entitlement import MarketDataEntitlement
     from app.live.mock_streaming import MockStreamingProvider
     from app.live.streaming import StreamingMarketDataProvider
+    from app.long_term_research.fundamentals import FundamentalsProvider
+    from app.long_term_research.repository import LongTermResearchRepository
 
 
 @lru_cache
@@ -184,6 +186,34 @@ def get_session_factory():
     from app.database.session import SessionLocal
 
     return SessionLocal
+
+
+@lru_cache
+def get_fundamentals_provider() -> "FundamentalsProvider":
+    """Mirrors get_news_provider's exact shape/convention. Imports are
+    local, not module-level: app.long_term_research is a brand-new
+    package and keeping its import out of this always-loaded module's
+    top-level avoids pulling it (and yfinance) into every single request
+    that never touches this feature."""
+    from app.long_term_research.fundamentals import (
+        FixtureFundamentalsProvider,
+        YFinanceFundamentalsProvider,
+    )
+
+    provider_name = get_settings().fundamentals_provider.lower()
+    if provider_name == "yfinance":
+        return YFinanceFundamentalsProvider()
+    if provider_name == "fixture":
+        return FixtureFundamentalsProvider()
+    raise ValueError(f"Unknown FUNDAMENTALS_PROVIDER {provider_name!r}; expected 'yfinance' or 'fixture'")
+
+
+def get_long_term_research_repository(
+    db: "Session" = Depends(get_db),
+) -> "LongTermResearchRepository":
+    from app.long_term_research.repository import SqlAlchemyLongTermResearchRepository
+
+    return SqlAlchemyLongTermResearchRepository(db)
 
 
 @lru_cache

@@ -29,6 +29,7 @@ from app.api.routes import (
     forecasts,
     health,
     live,
+    long_term_research,
     market,
     monitoring,
     news,
@@ -233,6 +234,7 @@ app.include_router(alerts.router)
 app.include_router(monitoring.router)
 app.include_router(validation.router)
 app.include_router(dev_live.router)
+app.include_router(long_term_research.router)
 
 
 @app.exception_handler(AuthenticationError)

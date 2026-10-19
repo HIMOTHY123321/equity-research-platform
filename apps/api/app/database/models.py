@@ -1111,6 +1111,64 @@ class UserPushPreferenceRecord(Base):
     )
     push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     pushover_user_key_encrypted: Mapped[Optional[str]] = mapped_column(String(500))
+    long_term_push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    """Long-Term Investing Research scan (app.long_term_research): a
+    SEPARATE on/off switch from `push_enabled` above -- a user may want
+    short-term Decision Engine pushes without long-term research pushes,
+    or vice versa. Shares the same `pushover_user_key_encrypted`
+    destination (one device, two independent opt-ins to it)."""
     row_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
+
+
+class LongTermResearchSnapshotRecord(Base):
+    """app.long_term_research: one frozen, append-only daily research
+    conclusion for one symbol as of one instant. NEVER updated in place
+    once inserted -- a changed conclusion is always a NEW row with a
+    later `as_of`, exactly like AlertEventRecord/ForecastRecord elsewhere
+    in this codebase, so later outcome evaluation (per spec, done
+    separately and later to avoid leakage) can always see the full,
+    untouched history of what was actually concluded on each day."""
+
+    __tablename__ = "long_term_research_snapshots"
+    __table_args__ = (Index("ix_ltr_snapshot_symbol_as_of", "symbol", "as_of"),)
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    symbol: Mapped[str] = mapped_column(String(16), index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    price: Mapped[Optional[float]] = mapped_column(Float)
+    research_state: Mapped[str] = mapped_column(String(64))
+    evidence_quality: Mapped[str] = mapped_column(String(32))
+    factors_json: Mapped[dict] = mapped_column(JSON)
+    positive_evidence_json: Mapped[list] = mapped_column(JSON, default=list)
+    negative_evidence_json: Mapped[list] = mapped_column(JSON, default=list)
+    contradictions_json: Mapped[list] = mapped_column(JSON, default=list)
+    missing_evidence_json: Mapped[list] = mapped_column(JSON, default=list)
+    reason: Mapped[str] = mapped_column(String(1000))
+    what_would_change_state: Mapped[str] = mapped_column(String(1000))
+    market_data_provider: Mapped[str] = mapped_column(String(32))
+    fundamentals_provider: Mapped[str] = mapped_column(String(32))
+    pipeline_version: Mapped[str] = mapped_column(String(32))
+    ai_summary: Mapped[Optional[str]] = mapped_column(String(4000))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LongTermScheduledScanRunRecord(Base):
+    """app.long_term_research: idempotency guard for the externally
+    (cron-)triggered scheduled scan ONLY -- the manual "RUN LONG-TERM
+    SCAN" button never writes here, so a user testing the feature can
+    always re-run it on demand regardless of whether the scheduled job
+    already ran today. `run_date` is a plain `YYYY-MM-DD` string in
+    America/New_York (the spec's own reference timezone for this
+    feature), not a DateTime -- the UNIQUE constraint on it is what makes
+    a second same-day scheduled trigger (e.g. a retried or overlapping
+    cron ping) a safe, cheap no-op read instead of a duplicate scan."""
+
+    __tablename__ = "long_term_scheduled_scan_runs"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    run_date: Mapped[str] = mapped_column(String(10), unique=True, index=True)
+    as_of: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    symbol_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

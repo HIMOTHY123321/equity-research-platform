@@ -53,6 +53,7 @@ describe("SettingsPage (Phase 16.1)", () => {
     vi.spyOn(api, "listMonitoring").mockResolvedValue([{ symbol: "NVDA", enabled: true, preferred_timeframes: [], decision_monitoring_enabled: true, added_at: "2026-01-01T00:00:00Z" }]);
     vi.spyOn(api, "getPushStatus").mockResolvedValue({ configured: true });
     vi.spyOn(api, "getPushPreference").mockResolvedValue({ enabled: false, key_configured: true });
+    vi.spyOn(api, "getLongTermPushPreference").mockResolvedValue({ enabled: false, key_configured: true });
     vi.spyOn(api, "getLiveStatus").mockResolvedValue({
       capabilities: {
         real_time_quotes: false,

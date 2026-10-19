@@ -16,6 +16,7 @@ const NAV_ITEMS = [
   { href: "/watchlist", label: "Watchlist", symbolAware: false },
   { href: "/scanner", label: "Scanner", symbolAware: false },
   { href: "/alerts", label: "Alerts", symbolAware: false },
+  { href: "/long-term-research", label: "Long-Term Research", symbolAware: false },
   { href: "/validation", label: "Validation Lab", symbolAware: false },
   { href: "/glossary", label: "Glossary", symbolAware: false },
 ];

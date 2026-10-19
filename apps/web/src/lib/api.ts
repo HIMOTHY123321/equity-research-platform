@@ -25,6 +25,9 @@ import type {
   HistoricalProspectiveComparison,
   LedgerEntriesResponse,
   LiveStatusResponse,
+  LongTermPushPreference,
+  LongTermResearchResult,
+  LongTermScanResponse,
   MarketReaction,
   MarketStructureSnapshot,
   MonitoringSubscription,
@@ -761,6 +764,38 @@ export function setPushKey(pushoverUserKey: string): Promise<{ key_configured: b
 
 export function deletePushKey(): Promise<{ key_configured: boolean }> {
   return request<{ key_configured: boolean }>(`/api/alerts/push-key`, { method: "DELETE" });
+}
+
+// ---- Long-Term Investing Research ------------------------------------------
+// A feature wholly separate from the Decision Engine above -- see
+// app.long_term_research for the backend.
+
+/** The latest snapshot (if any) for every symbol on the caller's own
+ * watchlist. */
+export function listLongTermResearch(): Promise<LongTermResearchResult[]> {
+  return request<LongTermResearchResult[]>(`/api/long-term-research`);
+}
+
+export function getLongTermResearch(symbol: string): Promise<LongTermResearchResult> {
+  return request<LongTermResearchResult>(`/api/long-term-research/${symbol}`);
+}
+
+/** "RUN LONG-TERM SCAN" -- runs immediately for the caller's own
+ * watchlist, no idempotency gate (the on-demand testing/preview path). */
+export function runLongTermScan(): Promise<LongTermScanResponse> {
+  return request<LongTermScanResponse>(`/api/long-term-research/scan`, { method: "POST" });
+}
+
+export function getLongTermPushPreference(): Promise<LongTermPushPreference> {
+  return request<LongTermPushPreference>(`/api/long-term-research/push-preference/me`);
+}
+
+export function setLongTermPushPreference(enabled: boolean): Promise<LongTermPushPreference> {
+  return request<LongTermPushPreference>(`/api/long-term-research/push-preference/me`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
 }
 
 export function listMonitoring(): Promise<MonitoringSubscription[]> {

@@ -233,6 +233,23 @@ class Settings(BaseSettings):
     # the browser, logged, or included in an exception message.
     pushover_key_encryption_key: str = ""
 
+    # Long-Term Investing Research scan (app.long_term_research) -- a
+    # feature wholly separate from the Decision Engine. "yfinance"
+    # (default -- no account/key needed, research/development only,
+    # same caveat as market_data_provider's own yfinance option) or
+    # "fixture" (deterministic, empty unless seeded -- tests only).
+    fundamentals_provider: str = "yfinance"
+
+    # Shared secret the externally (cron-)triggered scheduled scan
+    # endpoint requires in its `X-Scheduler-Secret` header -- see
+    # app.api.routes.long_term_research. Reuses the SAME
+    # `scheduler_shared_secret` setting already reserved above for
+    # exactly this kind of externally-triggered-endpoint authentication
+    # (it was never wired to anything before this feature). An empty
+    # value (the default) means the scheduled-scan endpoint always
+    # rejects every request -- there is no "secret not configured, so
+    # allow anyone" fallback.
+
     @field_validator("secret_key", mode="before")
     @classmethod
     def _blank_secret_key_means_unset(cls, value):
