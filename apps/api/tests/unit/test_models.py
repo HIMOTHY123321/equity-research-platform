@@ -49,6 +49,7 @@ EXPECTED_TABLES = {
     "user_monitoring_subscriptions",
     "user_alert_deliveries",
     "user_alert_preferences",
+    "user_push_preferences",
 }
 
 

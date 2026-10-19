@@ -198,6 +198,41 @@ class Settings(BaseSettings):
     # impossible to enable in production, not just discouraged.
     enable_dev_live_simulator: bool = False
 
+    # Phase 20/20.1: Pushover phone-notification delivery (app.alerts.push).
+    # `pushover_app_token` identifies THIS application to Pushover's API --
+    # it is genuinely shared/global, the same way a Twilio account SID would
+    # be. There is deliberately NO global `pushover_user_key` setting: in a
+    # multi-user product, a single global destination key would mean every
+    # user's alerts ring the SAME phone, which is a real cross-user data
+    # leak, not just a config inconvenience. Each user who opts in stores
+    # their OWN Pushover User Key, encrypted at rest (see
+    # app.notifications.secret_crypto and
+    # UserPushPreferenceRecord.pushover_user_key_encrypted) -- push is
+    # dispatched separately to each eligible user's own key, never a shared
+    # one. Missing the app token or the global enable flag is never a
+    # startup error, it just means push dispatch silently no-ops (same
+    # "absence is not an error" convention as twelve_data_api_key above).
+    # The app token is never sent to the browser, logged, or included in an
+    # exception message; only this backend process ever holds it.
+    push_notifications_enabled: bool = False
+    pushover_app_token: str = ""
+
+    # Phase 20.2: the DEDICATED key used to encrypt/decrypt per-user
+    # Pushover destination keys at rest (app.notifications.secret_crypto).
+    # Deliberately separate from `secret_key` (the JWT/session signing
+    # secret): rotating SECRET_KEY is an ordinary, expected session-
+    # security operation and must never silently make every already-
+    # stored Pushover user key undecryptable as a side effect. May be
+    # either a real `Fernet.generate_key()` value or any other non-empty
+    # string (safely transformed into a Fernet key either way -- see
+    # secret_crypto._coerce_fernet_key). Missing is never a startup error
+    # -- push dispatch and the push-key endpoints simply treat push as
+    # unconfigured (see app.alerts.push and app.api.routes.alerts), the
+    # same "absence degrades, never crashes" convention every other
+    # optional provider credential in this file follows. Never sent to
+    # the browser, logged, or included in an exception message.
+    pushover_key_encryption_key: str = ""
+
     @field_validator("secret_key", mode="before")
     @classmethod
     def _blank_secret_key_means_unset(cls, value):

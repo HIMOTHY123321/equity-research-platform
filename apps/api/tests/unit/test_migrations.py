@@ -143,6 +143,23 @@ def _load_migration_0011():
     return module
 
 
+# Phase 20: migration 0013 later adds push_status/push_attempted_at/
+# push_error columns to user_alert_deliveries (one of 0011's own new
+# tables). It never depends on 0012's watchlist tables existing, so it's
+# safe to apply directly on top of 0011 here without reproducing the
+# whole chain in between.
+_MIGRATION_0013_PATH = (
+    Path(__file__).resolve().parents[2] / "alembic" / "versions" / "0013_push_notifications.py"
+)
+
+
+def _load_migration_0013():
+    spec = importlib.util.spec_from_file_location("migration_0013", _MIGRATION_0013_PATH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def _fresh_engine_with_pre_0011_users_table() -> sa.Engine:
     engine = sa.create_engine("sqlite:///:memory:")
     with engine.begin() as conn:
@@ -162,6 +179,16 @@ def test_0011_upgrade_creates_every_new_table_matching_the_current_orm_columns()
     with engine.begin() as conn:
         migration.op = Operations(MigrationContext.configure(conn))
         migration.upgrade()
+
+    # Phase 20: user_alert_deliveries gains three more columns under
+    # 0013 -- apply that too so this comparison is against the schema as
+    # it exists after every migration that touches these tables, not
+    # just 0011 in isolation (which would now always mismatch the
+    # current ORM model).
+    migration_0013 = _load_migration_0013()
+    with engine.begin() as conn:
+        migration_0013.op = Operations(MigrationContext.configure(conn))
+        migration_0013.upgrade()
 
     with engine.connect() as conn:
         inspector = sa.inspect(conn)

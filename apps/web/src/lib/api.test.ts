@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getCurrentUser, getLiveStreamTicket, getWatchlist, login, logout, signup } from "@/lib/api";
+import {
+  deletePushKey,
+  getCurrentUser,
+  getLiveStreamTicket,
+  getPushStatus,
+  getWatchlist,
+  login,
+  logout,
+  setPushKey,
+  setPushPreference,
+  signup,
+} from "@/lib/api";
 
 const SAMPLE_USER = {
   id: "u1",
@@ -99,5 +110,64 @@ describe("lib/api normal REST calls (Phase 19.4: through the general /api/backen
       expect.objectContaining({ method: "POST" }),
     );
     expect(result.ticket).toBe("a.b.c");
+  });
+
+  it("getPushStatus never sends a credential and routes through the same-origin proxy", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ configured: true }), { status: 200 }));
+
+    const result = await getPushStatus();
+
+    expect(fetchSpy).toHaveBeenCalledWith("/api/backend/api/alerts/push-status", expect.anything());
+    expect(result).toEqual({ configured: true });
+    expect(JSON.stringify(result)).not.toMatch(/token|key/i);
+  });
+
+  it("setPushPreference PUTs through the same-origin proxy with the new value", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ enabled: true, key_configured: true }), { status: 200 }));
+
+    await setPushPreference(true);
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/backend/api/alerts/push-preference",
+      expect.objectContaining({ method: "PUT", body: JSON.stringify({ enabled: true }) }),
+    );
+  });
+
+  it("setPushKey PUTs the key through the same-origin proxy and the response never echoes it back", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ key_configured: true }), { status: 200 }));
+
+    const result = await setPushKey("u-my-secret-key");
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/backend/api/alerts/push-key",
+      expect.objectContaining({
+        method: "PUT",
+        body: JSON.stringify({ pushover_user_key: "u-my-secret-key" }),
+      }),
+    );
+    expect(JSON.stringify(result)).not.toContain("u-my-secret-key");
+  });
+
+  it("deletePushKey DELETEs through the same-origin proxy", async () => {
+    vi.stubEnv("NEXT_PUBLIC_API_URL", "https://ai-market-desk.onrender.com");
+    const fetchSpy = vi
+      .spyOn(global, "fetch")
+      .mockResolvedValue(new Response(JSON.stringify({ key_configured: false }), { status: 200 }));
+
+    await deletePushKey();
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      "/api/backend/api/alerts/push-key",
+      expect.objectContaining({ method: "DELETE" }),
+    );
   });
 });

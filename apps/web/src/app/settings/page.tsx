@@ -7,14 +7,19 @@ import { TopNav } from "@/components/TopNav";
 import { useAuth } from "@/lib/auth-context";
 import {
   ApiError,
+  deletePushKey,
   disableMonitoring,
   enableMonitoring,
   getAlertPreferences,
   getLiveStatus,
   getMyPlan,
+  getPushPreference,
+  getPushStatus,
   getSystemStatus,
   listMonitoring,
   setAlertPreference,
+  setPushKey,
+  setPushPreference,
   type PlanOut,
   type SystemStatus,
 } from "@/lib/api";
@@ -96,6 +101,7 @@ export default function SettingsPage() {
 
         <PlanSection />
         <ProviderStatusSection />
+        <PushNotificationsSection />
         <AlertPreferencesSection />
         <MonitoringSection />
       </main>
@@ -221,6 +227,161 @@ function ProviderStatusSection() {
           </>
         )}
       </dl>
+    </Section>
+  );
+}
+
+/**
+ * Phase 20: phone-push (Pushover) notifications for the five decisive
+ * decision states (entry/strengthening/weakening/invalidated/exit).
+ * Deliberately the smallest useful control surface: one on/off switch,
+ * plus an honest "not configured yet" message when the server has no
+ * Pushover credentials -- never a place to enter a token/key (those are
+ * server-side only, set via environment variables, never through this
+ * UI). Which symbols can trigger a push is already fully covered by the
+ * "Monitoring subscriptions" section below -- no separate per-symbol
+ * push list exists or is needed.
+ */
+function PushNotificationsSection() {
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [keyConfigured, setKeyConfigured] = useState(false);
+  const [state, setState] = useState<"loading" | "ready" | "error">("loading");
+  const [saving, setSaving] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const [keyError, setKeyError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getPushStatus(), getPushPreference()])
+      .then(([status, pref]) => {
+        if (cancelled) return;
+        setConfigured(status.configured);
+        setEnabled(pref.enabled);
+        setKeyConfigured(pref.key_configured);
+        setState("ready");
+      })
+      .catch(() => !cancelled && setState("error"));
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggle(next: boolean) {
+    setEnabled(next);
+    setSaving(true);
+    try {
+      await setPushPreference(next);
+    } catch (err) {
+      setEnabled(!next);
+      void (err instanceof ApiError ? err.message : err);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveKey() {
+    setKeyError(null);
+    try {
+      const result = await setPushKey(keyInput);
+      setKeyConfigured(result.key_configured);
+      setKeyInput(""); // never keep the plaintext key in the UI after submission
+    } catch (err) {
+      setKeyError(err instanceof ApiError ? err.message : "Failed to save key.");
+    }
+  }
+
+  async function removeKey() {
+    try {
+      const result = await deletePushKey();
+      setKeyConfigured(result.key_configured);
+      if (!result.key_configured) await toggle(false); // can't stay enabled with no destination
+    } catch (err) {
+      setKeyError(err instanceof ApiError ? err.message : "Failed to remove key.");
+    }
+  }
+
+  return (
+    <Section title="Phone notifications">
+      {state === "loading" && <p className="text-xs text-muted">Loading…</p>}
+      {state === "error" && <p className="text-xs text-negative">Failed to load phone notification settings.</p>}
+      {state === "ready" && (
+        <div className="space-y-3 text-xs">
+          <p className="text-muted">
+            Get a push notification on your OWN phone (via Pushover) when a symbol you monitor enters an entry
+            setup, the thesis strengthens or weakens, is invalidated, or reaches exit conditions. No buy/sell
+            recommendations are ever sent -- only the deterministic decision state. Your notifications are sent
+            only to your own Pushover key below, never to anyone else&apos;s device.
+          </p>
+          {configured === false && (
+            <p className="text-[10px] text-warning">
+              Push notifications are not enabled on this server yet. Ask your operator to set
+              PUSH_NOTIFICATIONS_ENABLED, PUSHOVER_APP_TOKEN, and PUSHOVER_KEY_ENCRYPTION_KEY.
+            </p>
+          )}
+
+          <div>
+            <label htmlFor="pushover-key" className="mb-1 block text-muted">
+              Your Pushover User Key
+            </label>
+            <div className="flex gap-2">
+              <input
+                id="pushover-key"
+                type="password"
+                autoComplete="off"
+                value={keyInput}
+                onChange={(e) => setKeyInput(e.target.value)}
+                placeholder={keyConfigured ? "•••• key configured -- enter a new key to replace it" : "Paste your Pushover User Key"}
+                className="flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs"
+              />
+              <button
+                type="button"
+                onClick={saveKey}
+                disabled={!keyInput.trim() || configured === false}
+                className="rounded-md border border-border px-3 py-1 text-xs hover:border-accent disabled:opacity-50"
+              >
+                Save
+              </button>
+              {keyConfigured && (
+                <button
+                  type="button"
+                  onClick={removeKey}
+                  className="rounded-md border border-border px-3 py-1 text-xs hover:border-negative hover:text-negative"
+                >
+                  Remove
+                </button>
+              )}
+            </div>
+            {keyError && <p className="mt-1 text-negative">{keyError}</p>}
+            <p className="mt-1 text-[10px] text-muted">
+              {keyConfigured ? "A key is configured for your account." : "No key configured yet."} Your key is
+              encrypted and never shown again once saved.
+            </p>
+          </div>
+
+          <div className="flex items-center justify-between gap-2">
+            <span>Enable phone notifications</span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={enabled}
+              aria-label={`${enabled ? "Disable" : "Enable"} phone notifications`}
+              disabled={configured === false || !keyConfigured || saving}
+              onClick={() => toggle(!enabled)}
+              className={`h-4 w-8 rounded-full transition-colors disabled:opacity-50 ${
+                enabled ? "bg-accent" : "bg-border"
+              }`}
+            >
+              <span
+                className={`block h-3 w-3 rounded-full bg-background transition-transform ${
+                  enabled ? "translate-x-4" : "translate-x-0.5"
+                }`}
+              />
+            </button>
+          </div>
+          {!keyConfigured && <p className="text-[10px] text-muted">Save your Pushover key above to enable.</p>}
+        </div>
+      )}
     </Section>
   );
 }

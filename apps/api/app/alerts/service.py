@@ -18,6 +18,7 @@ from datetime import datetime, timedelta
 from typing import Optional
 
 from app.alerts.dedup import DEFAULT_COOLDOWN, condition_dedup_key, transition_dedup_key
+from app.alerts.push import dispatch_push_notifications, is_push_eligible_transition
 from app.alerts.repository import AlertRepository
 from app.alerts.schemas import (
     DEFAULT_ALERT_PREFERENCES,
@@ -123,15 +124,43 @@ class AlertService:
     def remove_listener(self, queue: "asyncio.Queue[AlertEmittedEvent]") -> None:
         self._event_bus.remove_listener(queue)
 
-    def _preference_enabled(self, alert_type: AlertType) -> bool:
+    def _explicit_preference(self, alert_type: AlertType) -> Optional[bool]:
+        """None when no operator override exists at all -- distinct from
+        an explicit False, which must always be respected (§20.1: push
+        never overrides an EXPLICIT disable, only the bare DEFAULT)."""
         overrides = {p.alert_type: p.enabled for p in self._repository.get_preferences()}
-        if alert_type in overrides:
-            return overrides[alert_type]
+        return overrides.get(alert_type)
+
+    def _preference_enabled(self, alert_type: AlertType) -> bool:
+        explicit = self._explicit_preference(alert_type)
+        if explicit is not None:
+            return explicit
         return DEFAULT_ALERT_PREFERENCES.get(alert_type, True)
 
-    def _record(self, event: AlertEvent) -> Optional[AlertEvent]:
-        if not self._preference_enabled(event.alert_type):
+    def _record(self, event: AlertEvent, *, push_plan: Optional[DecisionPlan] = None) -> Optional[AlertEvent]:
+        explicit = self._explicit_preference(event.alert_type)
+        default = DEFAULT_ALERT_PREFERENCES.get(event.alert_type, True)
+        globally_allowed = explicit if explicit is not None else default
+
+        # Phase 20.1: a push-eligible, LIVE_PROSPECTIVE transition is
+        # still recorded (so dedup applies and a user who explicitly
+        # opted into push can still receive one) even when only the bare
+        # DEFAULT -- never an explicit operator override -- would
+        # otherwise block it. This never changes the in-app Alert Center
+        # default for anyone: deliver_alert_to_subscribed_users below
+        # still applies each user's OWN alert-type preference (which
+        # defaults exactly the way it always has), and the event bus is
+        # only published when something was actually delivered in-app or
+        # the type is genuinely globally allowed -- see below.
+        push_bypass = (
+            explicit is None
+            and not default
+            and push_plan is not None
+            and is_push_eligible_transition(event)
+        )
+        if not globally_allowed and not push_bypass:
             return None
+
         violations = contains_banned_language(f"{event.title} {event.summary}")
         if violations:
             raise ValueError(f"AlertEvent text failed banned-language check: {violations}")
@@ -141,9 +170,30 @@ class AlertService:
             # symbol -- purely a per-user delivery/read-state row keyed off
             # this ONE already-persisted, never-duplicated AlertEventRecord.
             # Must run only on a genuine new row, never on a dedup hit,
-            # same discipline as the event-bus publish above.
-            self._repository.deliver_alert_to_subscribed_users(stored)
-            self._event_bus.publish(AlertEmittedEvent(alert=stored))
+            # same discipline as the event-bus publish above. This fan-out
+            # still applies each user's own in-app alert-type preference
+            # (unchanged default) -- a push-bypass never widens who sees
+            # this in their Alert Center.
+            delivered_user_ids = self._repository.deliver_alert_to_subscribed_users(stored)
+            if globally_allowed or delivered_user_ids:
+                self._event_bus.publish(AlertEmittedEvent(alert=stored))
+            # Phase 20/20.1: phone-push delivery. `push_plan` is only ever
+            # passed by emit_transition_alert below -- condition alerts
+            # (data-staleness, stream health, etc.) are never push-
+            # eligible in the first place (see
+            # app.alerts.push.PUSH_ELIGIBLE_STATES), so there is nothing
+            # for this to do for them regardless. Push candidates are
+            # every user who monitors this symbol (NOT delivered_user_ids
+            # -- push is its own opt-in, independent of each user's
+            # in-app alert-type preference; see
+            # AlertRepository.list_subscribed_user_ids). Dispatch itself
+            # can never raise (see that module's own docstring) -- this
+            # is purely additive delivery on top of the exactly-once
+            # `created` guard above, never a second alert engine.
+            if push_plan is not None:
+                subscribed_user_ids = self._repository.list_subscribed_user_ids(stored.symbol)
+                if subscribed_user_ids:
+                    dispatch_push_notifications(self._repository, stored, push_plan, subscribed_user_ids)
         return stored
 
     def emit_transition_alert(
@@ -187,7 +237,7 @@ class AlertService:
             pipeline_version=PIPELINE_VERSION,
             created_at=self._now(),
         )
-        return self._record(event)
+        return self._record(event, push_plan=plan)
 
     def emit_condition_alert(
         self,

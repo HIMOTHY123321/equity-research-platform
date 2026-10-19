@@ -1055,6 +1055,18 @@ class UserAlertDeliveryRecord(Base):
     delivered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     acknowledged_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
+    # Phase 20 (app.alerts.push): set only when a Pushover send was
+    # actually attempted for this user's delivery of this alert -- NULL
+    # (the default) means "no push was ever attempted" (e.g. this user
+    # has push disabled, or the alert type isn't push-eligible), never
+    # confused with "attempted and failed". `push_error` is always one of
+    # app.notifications.pushover.PushoverSendResult's short category
+    # labels, never a raw exception message or response body -- it must
+    # never be able to contain a credential.
+    push_status: Mapped[Optional[str]] = mapped_column(String(16))
+    push_attempted_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+    push_error: Mapped[Optional[str]] = mapped_column(String(64))
+
 
 class UserAlertPreferenceRecord(Base):
     """Per-user alert-type mute/unmute -- the user-scoped counterpart of the
@@ -1068,6 +1080,37 @@ class UserAlertPreferenceRecord(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     alert_type: Mapped[str] = mapped_column(String(32), index=True)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    row_updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+
+class UserPushPreferenceRecord(Base):
+    """Phase 20/20.1 (app.alerts.push): one per-user phone-notification
+    on/off switch PLUS that user's own encrypted Pushover destination --
+    deliberately NOT per-alert-type (that's what UserAlertPreferenceRecord
+    above already covers; this is only "should push ever fire for ME at
+    all, and to WHICH device"). `push_enabled` defaults to disabled (a
+    user is never silently opted into phone notifications just by
+    existing); `pushover_user_key_encrypted` defaults to NULL (no
+    destination configured) until that user explicitly submits their own
+    key. Both must be set for a push to ever reach this user -- see
+    app.alerts.push.dispatch_push_notifications. The key is stored
+    encrypted (app.notifications.secret_crypto), never in plaintext, and
+    is never returned by any API response once submitted -- only a
+    `key_configured` boolean is. Which SYMBOLS can trigger a push for
+    this user is already fully covered by that user's own
+    UserMonitoringSubscriptionRecord rows -- no separate per-symbol push
+    table is needed."""
+
+    __tablename__ = "user_push_preferences"
+
+    id: Mapped[uuid.UUID] = _portable_uuid_pk()
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True, index=True
+    )
+    push_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    pushover_user_key_encrypted: Mapped[Optional[str]] = mapped_column(String(500))
     row_updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

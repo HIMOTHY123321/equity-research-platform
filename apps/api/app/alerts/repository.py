@@ -12,8 +12,9 @@ row is returned instead.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -30,6 +31,7 @@ from app.alerts.models import (
     UserAlertDeliveryRecord,
     UserAlertPreferenceRecord,
     UserMonitoringSubscriptionRecord,
+    UserPushPreferenceRecord,
 )
 from app.alerts.prospective import is_prospective_eligible
 from app.alerts.schemas import (
@@ -116,14 +118,30 @@ class AlertRepository(ABC):
         ...
 
     @abstractmethod
-    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> int:
+    def list_subscribed_user_ids(self, symbol: str) -> list[UUID]:
+        """Every user with an ENABLED UserMonitoringSubscriptionRecord for
+        `symbol` -- deliberately NOT filtered by any per-alert-type
+        preference. The shared base both in-app delivery (further
+        filtered by alert-type preference, see
+        deliver_alert_to_subscribed_users below) and push delivery
+        (further filtered by push preference + destination key, see
+        app.alerts.push) build on -- push is intentionally its OWN
+        channel/opt-in, independent of whether a user has muted a given
+        alert type in-app (Phase 20.1)."""
+        ...
+
+    @abstractmethod
+    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> list[UUID]:
         """Fan-out ONLY -- creates one UserAlertDeliveryRecord per user
         whose enabled UserMonitoringSubscriptionRecord matches
         `event.symbol` (respecting that user's own alert-type preference).
         Must NEVER be mistaken for a second research observation: the
         single, deterministic `event` row this fans out from already
-        exists and is never duplicated. Returns the number of users
-        delivered to."""
+        exists and is never duplicated. Returns the user_ids a NEW
+        delivery row was actually created for -- this is the IN-APP
+        delivery set; push delivery uses list_subscribed_user_ids
+        instead (Phase 20.1), since push must not depend on a user's
+        in-app alert-type preference."""
         ...
 
     @abstractmethod
@@ -160,6 +178,55 @@ class AlertRepository(ABC):
 
     @abstractmethod
     def set_user_preference(self, user_id, alert_type: AlertType, enabled: bool) -> None: ...
+
+    # --------------------------------------------------------------- Phase 20
+    # Phone-push delivery (app.alerts.push) -- see UserPushPreferenceRecord's
+    # own docstring for why this is a single global per-user switch, not a
+    # per-alert-type or per-symbol table.
+
+    @abstractmethod
+    def get_user_push_enabled(self, user_id) -> bool:
+        """False (the conservative default -- §7 of the spec) when the
+        user has never set a preference at all, never True by default."""
+        ...
+
+    @abstractmethod
+    def set_user_push_enabled(self, user_id, enabled: bool) -> None: ...
+
+    @abstractmethod
+    def get_user_pushover_key_encrypted(self, user_id) -> Optional[str]:
+        """Returns the raw ENCRYPTED ciphertext (app.notifications.
+        secret_crypto) or None if this user has never configured a
+        destination key. Callers needing the plaintext (only
+        app.alerts.push, to actually send) must decrypt it themselves --
+        this repository has no knowledge of `secret_key` and never
+        decrypts anything, keeping encryption/decryption concerns
+        entirely out of the persistence layer."""
+        ...
+
+    @abstractmethod
+    def set_user_pushover_key_encrypted(self, user_id, encrypted_key: Optional[str]) -> None:
+        """`None` clears the stored key (the user removed their
+        destination). Never accepts or stores a plaintext key -- the
+        caller (the route layer) is responsible for encrypting first."""
+        ...
+
+    @abstractmethod
+    def record_push_delivery(
+        self, user_id, alert_id: str, *, success: bool, error: Optional[str] = None
+    ) -> None:
+        """Records the outcome of ONE Pushover send attempt against this
+        user's existing UserAlertDeliveryRecord row for `alert_id`, when
+        one exists. Phase 20.1: push eligibility no longer implies an
+        in-app delivery row exists (a user who opted into push but
+        never enabled a given alert type in-app has no
+        UserAlertDeliveryRecord for it at all -- see
+        list_subscribed_user_ids) -- for that case this is a deliberate
+        no-op (the attempt is still logged by app.alerts.push, just not
+        persisted per-user), never an error and never a reason to create
+        a row that would incorrectly surface in that user's in-app Alert
+        Center."""
+        ...
 
     @abstractmethod
     def count_prospective_observations(self, decision_repository) -> int:
@@ -218,6 +285,7 @@ class SqlAlchemyAlertRepository(AlertRepository):
                 UserMonitoringSubscriptionRecord.__table__,
                 UserAlertDeliveryRecord.__table__,
                 UserAlertPreferenceRecord.__table__,
+                UserPushPreferenceRecord.__table__,
             ],
             checkfirst=True,
         )
@@ -375,7 +443,9 @@ class SqlAlchemyAlertRepository(AlertRepository):
 
     def list_user_monitoring_subscriptions(self, user_id) -> list[MonitoringSubscription]:
         rows = self._session.execute(
-            select(UserMonitoringSubscriptionRecord).where(UserMonitoringSubscriptionRecord.user_id == user_id)
+            select(UserMonitoringSubscriptionRecord).where(
+                UserMonitoringSubscriptionRecord.user_id == user_id
+            )
         ).scalars()
         return sorted(
             (
@@ -434,21 +504,24 @@ class SqlAlchemyAlertRepository(AlertRepository):
         ).scalars()
         return sorted(set(rows))
 
-    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> int:
-        subscriber_ids = (
+    def list_subscribed_user_ids(self, symbol: str) -> list[UUID]:
+        return list(
             self._session.execute(
                 select(UserMonitoringSubscriptionRecord.user_id).where(
-                    UserMonitoringSubscriptionRecord.symbol == event.symbol,
+                    UserMonitoringSubscriptionRecord.symbol == symbol,
                     UserMonitoringSubscriptionRecord.enabled.is_(True),
                 )
             )
             .scalars()
             .all()
         )
-        if not subscriber_ids:
-            return 0
 
-        delivered = 0
+    def deliver_alert_to_subscribed_users(self, event: AlertEvent) -> list[UUID]:
+        subscriber_ids = self.list_subscribed_user_ids(event.symbol)
+        if not subscriber_ids:
+            return []
+
+        delivered: list[UUID] = []
         for user_id in subscriber_ids:
             if not self._user_preference_enabled(user_id, event.alert_type):
                 continue
@@ -463,7 +536,7 @@ class SqlAlchemyAlertRepository(AlertRepository):
             self._session.add(
                 UserAlertDeliveryRecord(user_id=user_id, alert_id=event.alert_id, symbol=event.symbol)
             )
-            delivered += 1
+            delivered.append(user_id)
         if delivered:
             self._session.commit()
         return delivered
@@ -555,6 +628,51 @@ class SqlAlchemyAlertRepository(AlertRepository):
             self._session.add(
                 UserAlertPreferenceRecord(user_id=user_id, alert_type=alert_type.value, enabled=enabled)
             )
+        self._session.commit()
+
+    def get_user_push_enabled(self, user_id) -> bool:
+        row = self._session.execute(
+            select(UserPushPreferenceRecord).where(UserPushPreferenceRecord.user_id == user_id)
+        ).scalar_one_or_none()
+        return row.push_enabled if row is not None else False
+
+    def set_user_push_enabled(self, user_id, enabled: bool) -> None:
+        existing = self._session.execute(
+            select(UserPushPreferenceRecord).where(UserPushPreferenceRecord.user_id == user_id)
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.push_enabled = enabled
+        else:
+            self._session.add(UserPushPreferenceRecord(user_id=user_id, push_enabled=enabled))
+        self._session.commit()
+
+    def get_user_pushover_key_encrypted(self, user_id) -> Optional[str]:
+        row = self._session.execute(
+            select(UserPushPreferenceRecord).where(UserPushPreferenceRecord.user_id == user_id)
+        ).scalar_one_or_none()
+        return row.pushover_user_key_encrypted if row is not None else None
+
+    def set_user_pushover_key_encrypted(self, user_id, encrypted_key: Optional[str]) -> None:
+        existing = self._session.execute(
+            select(UserPushPreferenceRecord).where(UserPushPreferenceRecord.user_id == user_id)
+        ).scalar_one_or_none()
+        if existing is not None:
+            existing.pushover_user_key_encrypted = encrypted_key
+        else:
+            self._session.add(
+                UserPushPreferenceRecord(user_id=user_id, pushover_user_key_encrypted=encrypted_key)
+            )
+        self._session.commit()
+
+    def record_push_delivery(
+        self, user_id, alert_id: str, *, success: bool, error: Optional[str] = None
+    ) -> None:
+        delivery = self._get_user_delivery(user_id, alert_id)
+        if delivery is None:
+            return
+        delivery.push_status = "sent" if success else "failed"
+        delivery.push_attempted_at = datetime.now(timezone.utc)
+        delivery.push_error = None if success else error
         self._session.commit()
 
     def count_prospective_observations(self, decision_repository) -> int:

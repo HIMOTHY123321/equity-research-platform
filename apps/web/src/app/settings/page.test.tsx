@@ -51,6 +51,8 @@ describe("SettingsPage (Phase 16.1)", () => {
       { alert_type: "invalidated", enabled: true },
     ]);
     vi.spyOn(api, "listMonitoring").mockResolvedValue([{ symbol: "NVDA", enabled: true, preferred_timeframes: [], decision_monitoring_enabled: true, added_at: "2026-01-01T00:00:00Z" }]);
+    vi.spyOn(api, "getPushStatus").mockResolvedValue({ configured: true });
+    vi.spyOn(api, "getPushPreference").mockResolvedValue({ enabled: false, key_configured: true });
     vi.spyOn(api, "getLiveStatus").mockResolvedValue({
       capabilities: {
         real_time_quotes: false,
@@ -109,5 +111,86 @@ describe("SettingsPage (Phase 16.1)", () => {
   it("lists monitoring subscriptions independently of Watchlist", async () => {
     render(<SettingsPage />);
     await waitFor(() => expect(screen.getByText("NVDA")).toBeInTheDocument());
+  });
+
+  it("shows the phone notifications switch enabled/configured by default in this suite's mocks", async () => {
+    render(<SettingsPage />);
+    const switchEl = await screen.findByRole("switch", { name: /Enable phone notifications/ });
+    expect(switchEl).not.toBeDisabled();
+    expect(switchEl).toHaveAttribute("aria-checked", "false");
+  });
+
+  it("toggling phone notifications calls setPushPreference with the flipped value", async () => {
+    const setPref = vi.spyOn(api, "setPushPreference").mockResolvedValue({ enabled: true, key_configured: true });
+    render(<SettingsPage />);
+    const switchEl = await screen.findByRole("switch", { name: /Enable phone notifications/ });
+
+    fireEvent.click(switchEl);
+
+    await waitFor(() => expect(setPref).toHaveBeenCalledWith(true));
+  });
+
+  it("reverts the switch if setPushPreference fails", async () => {
+    vi.spyOn(api, "setPushPreference").mockRejectedValue(new Error("network down"));
+    render(<SettingsPage />);
+    const switchEl = await screen.findByRole("switch", { name: /Enable phone notifications/ });
+
+    fireEvent.click(switchEl);
+
+    await waitFor(() => expect(switchEl).toHaveAttribute("aria-checked", "false"));
+  });
+
+  it("shows an unconfigured message and disables the switch when Pushover is not configured server-wide", async () => {
+    vi.spyOn(api, "getPushStatus").mockResolvedValue({ configured: false });
+    render(<SettingsPage />);
+
+    await waitFor(() =>
+      expect(screen.getByText(/not enabled on this server yet/)).toBeInTheDocument(),
+    );
+    const switchEl = screen.getByRole("switch", { name: /Enable phone notifications/ });
+    expect(switchEl).toBeDisabled();
+  });
+
+  it("disables the switch until this user has saved their own key", async () => {
+    vi.spyOn(api, "getPushPreference").mockResolvedValue({ enabled: false, key_configured: false });
+    render(<SettingsPage />);
+
+    const switchEl = await screen.findByRole("switch", { name: /Enable phone notifications/ });
+    expect(switchEl).toBeDisabled();
+    expect(screen.getByText(/Save your Pushover key above to enable/)).toBeInTheDocument();
+  });
+
+  it("saving a key calls setPushKey and never keeps the plaintext key displayed afterward", async () => {
+    vi.spyOn(api, "getPushPreference").mockResolvedValue({ enabled: false, key_configured: false });
+    const setKey = vi.spyOn(api, "setPushKey").mockResolvedValue({ key_configured: true });
+    render(<SettingsPage />);
+
+    const input = await screen.findByLabelText(/Your Pushover User Key/);
+    fireEvent.change(input, { target: { value: "u-secret-destination-key" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() => expect(setKey).toHaveBeenCalledWith("u-secret-destination-key"));
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(""));
+    expect(document.body.textContent).not.toContain("u-secret-destination-key");
+  });
+
+  it("removing a key calls deletePushKey and disables the switch again", async () => {
+    const setPref = vi.spyOn(api, "setPushPreference").mockResolvedValue({ enabled: false, key_configured: false });
+    vi.spyOn(api, "deletePushKey").mockResolvedValue({ key_configured: false });
+    render(<SettingsPage />);
+
+    const removeButton = await screen.findByRole("button", { name: "Remove" });
+    fireEvent.click(removeButton);
+
+    await waitFor(() => expect(setPref).toHaveBeenCalledWith(false));
+    await waitFor(() =>
+      expect(screen.getByRole("switch", { name: /Enable phone notifications/ })).toBeDisabled(),
+    );
+  });
+
+  it("never renders any Pushover credential value anywhere on the page", async () => {
+    render(<SettingsPage />);
+    await waitFor(() => expect(screen.getAllByText("trader@example.com").length).toBeGreaterThan(0));
+    expect(document.body.textContent).not.toMatch(/pushover_app_token/i);
   });
 });

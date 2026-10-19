@@ -31,6 +31,8 @@ import type {
   NormalizedNewsArticle,
   ObservationStatus,
   OpportunityListResponse,
+  PushPreference,
+  PushStatus,
   ResearchBrief,
   ResearchQueryResponse,
   ResearchRun,
@@ -722,6 +724,43 @@ export function setAlertPreference(alertType: string, enabled: boolean): Promise
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ enabled }),
   });
+}
+
+/** Phase 20: this user's own phone-push on/off switch. Defaults to
+ * disabled -- see PushPreference's own doc comment. */
+export function getPushPreference(): Promise<PushPreference> {
+  return request<PushPreference>(`/api/alerts/push-preference`);
+}
+
+export function setPushPreference(enabled: boolean): Promise<PushPreference> {
+  return request<PushPreference>(`/api/alerts/push-preference`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ enabled }),
+  });
+}
+
+/** Whether the server has Pushover configured at all -- unauthenticated
+ * (same global-system-fact shape as getSystemStatus), never returns a
+ * credential value. */
+export function getPushStatus(): Promise<PushStatus> {
+  return request<PushStatus>(`/api/alerts/push-status`);
+}
+
+/** Phase 20.1: submits THIS user's OWN Pushover User Key over the same
+ * authenticated HTTPS session every other write uses. The key is never
+ * returned by any response, including this one -- only `key_configured`
+ * is. */
+export function setPushKey(pushoverUserKey: string): Promise<{ key_configured: boolean }> {
+  return request<{ key_configured: boolean }>(`/api/alerts/push-key`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ pushover_user_key: pushoverUserKey }),
+  });
+}
+
+export function deletePushKey(): Promise<{ key_configured: boolean }> {
+  return request<{ key_configured: boolean }>(`/api/alerts/push-key`, { method: "DELETE" });
 }
 
 export function listMonitoring(): Promise<MonitoringSubscription[]> {

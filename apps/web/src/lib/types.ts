@@ -1948,6 +1948,26 @@ export interface MonitoringSubscription {
   added_at: string;
 }
 
+/** Phase 20.1: this user's own phone-push on/off switch, plus whether
+ * THEY have their own Pushover destination key stored (never the key
+ * itself) -- separate from both the per-alert-type AlertPreference above
+ * and per-symbol MonitoringSubscription (push reuses that existing
+ * monitoring list for which symbols can trigger a notification; see
+ * PushStatus for whether the feature is configured on the SERVER at
+ * all). */
+export interface PushPreference {
+  enabled: boolean;
+  key_configured: boolean;
+}
+
+/** Whether the server has a Pushover app token configured and the
+ * feature globally enabled -- a server-wide capability flag, never a
+ * statement about any particular user's own key, and never reveals the
+ * token itself. */
+export interface PushStatus {
+  configured: boolean;
+}
+
 // The cross-symbol Decision Scanner (§9/§36): NOT a ranking -- one row per
 // monitored symbol, urgency-sorted by the same severity table alerts use.
 // `state: null` means no DecisionPlan exists for this symbol at all, distinct

@@ -206,6 +206,22 @@ class AlertPreference(BaseModel):
 # product conventions suggest better behavior"; this mirrors the severity
 # table above (IMPORTANT/CRITICAL default on, INFO/NOTICE default off),
 # which keeps the two concepts consistent with each other.
+#
+# Phase 20.1 (product/security review): THESIS_STRENGTHENING briefly
+# flipped to True during Phase 20 so phone-push could reach it, but that
+# changed the in-app Alert Center default for every user who never
+# explicitly overrode their own preference -- too broad a side effect for
+# a delivery-channel feature to cause. Reverted to the original False.
+# Phone push for THESIS_STRENGTHENING (and any other push-eligible,
+# default-off alert type) is instead handled WITHOUT touching this
+# table's defaults at all -- see AlertService._record's
+# `push_eligible_bypass` and app.alerts.push.is_push_eligible_transition:
+# a push-eligible, LIVE_PROSPECTIVE transition whose ONLY blocker is this
+# DEFAULT (never an explicit operator override) still gets recorded
+# (preserving dedup) and is still eligible for push to a user who
+# explicitly opted into push, while the in-app Alert Center default for
+# every other user remains exactly what it was before this feature
+# existed.
 DEFAULT_ALERT_PREFERENCES: dict[AlertType, bool] = {
     AlertType.PLAN_CREATED: False,
     AlertType.WATCHING: False,
